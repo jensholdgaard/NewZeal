@@ -42,4 +42,5 @@ class SpotifyController {
 
   HANDLE process_handle_ = nullptr;
   DWORD process_id_ = 0;
+  bool notified_crash_ = false;
 };

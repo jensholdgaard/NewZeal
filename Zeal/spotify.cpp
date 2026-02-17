@@ -40,7 +40,11 @@ bool SpotifyController::LaunchProcess() {
 
   BOOL success = CreateProcessA(nullptr, cmd_buf.data(), nullptr, nullptr, FALSE,
                                 CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
-  if (!success) return false;
+  if (!success) {
+    DWORD error = GetLastError();
+    Zeal::Game::print_chat("[Spotify] CreateProcess failed (error %lu).", error);
+    return false;
+  }
 
   process_handle_ = pi.hProcess;
   process_id_ = pi.dwProcessId;
@@ -53,8 +57,12 @@ bool SpotifyController::LaunchProcess() {
 // Cleans up the librespot child process and associated handles.
 void SpotifyController::CleanupProcess() {
   if (process_handle_) {
-    TerminateProcess(process_handle_, 0);
-    WaitForSingleObject(process_handle_, 2000);
+    // Attempt graceful shutdown first, then force terminate if needed.
+    GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, process_id_);
+    if (WaitForSingleObject(process_handle_, 2000) != WAIT_OBJECT_0) {
+      TerminateProcess(process_handle_, 0);
+      WaitForSingleObject(process_handle_, 1000);
+    }
     CloseHandle(process_handle_);
     process_handle_ = nullptr;
     process_id_ = 0;
@@ -102,16 +110,15 @@ void SpotifyController::PrintStatus() const {
 
 void SpotifyController::callback_main() {
   // Periodic check: if the setting is enabled but the process died, notify the user once.
-  static bool notified_crash = false;
   if (Enabled.get() && process_handle_ && !IsRunning()) {
-    if (!notified_crash) {
+    if (!notified_crash_) {
       Zeal::Game::print_chat("[Spotify] librespot process has exited unexpectedly.");
-      notified_crash = true;
+      notified_crash_ = true;
     }
     CleanupProcess();
     Enabled.set(false);
   }
-  if (!Enabled.get()) notified_crash = false;
+  if (!Enabled.get()) notified_crash_ = false;
 }
 
 SpotifyController::SpotifyController(ZealService *zeal) {
