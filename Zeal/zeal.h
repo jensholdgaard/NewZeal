@@ -57,6 +57,7 @@ class ZealService {
   std::unique_ptr<class OutputFile> outputfile = nullptr;
   std::unique_ptr<class PlayerMovement> movement = nullptr;
   std::unique_ptr<class MusicManager> music = nullptr;
+  std::unique_ptr<class SpotifyController> spotify = nullptr;
   std::unique_ptr<class Alarm> alarm = nullptr;
   std::unique_ptr<class Melody> melody = nullptr;
   std::unique_ptr<class AutoFire> autofire = nullptr;

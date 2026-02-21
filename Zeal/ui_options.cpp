@@ -21,6 +21,7 @@
 #include "memory.h"
 #include "music.h"
 #include "nameplate.h"
+#include "spotify.h"
 #include "npc_give.h"
 #include "outputfile.h"
 #include "patches.h"
@@ -431,6 +432,13 @@ void ui_options::InitGeneral() {
   });
   ui->AddCheckboxCallback(wnd, "Zeal_ClassicMusic", [](Zeal::GameUI::BasicWnd *wnd) {
     ZealService::get_instance()->music->ClassicMusic.set(wnd->Checked);
+  });
+  ui->AddCheckboxCallback(wnd, "Zeal_SpotifyEnabled", [](Zeal::GameUI::BasicWnd *wnd) {
+    auto *spotify = ZealService::get_instance()->spotify.get();
+    if (wnd->Checked)
+      spotify->Start();
+    else
+      spotify->Stop();
   });
   ui->AddCheckboxCallback(wnd, "Zeal_SuppressMissedNotes", [](Zeal::GameUI::BasicWnd *wnd) {
     ZealService::get_instance()->chatfilter_hook->setting_suppress_missed_notes.set(wnd->Checked);
@@ -1034,6 +1042,7 @@ void ui_options::UpdateOptionsGeneral() {
   ui->SetChecked("Zeal_BuffClickThru", ZealService::get_instance()->ui->buffs->BuffClickThru.get());
   ui->SetChecked("Zeal_BrownSkeletons", ZealService::get_instance()->game_patches->BrownSkeletons.get());
   ui->SetChecked("Zeal_ClassicMusic", ZealService::get_instance()->music->ClassicMusic.get());
+  ui->SetChecked("Zeal_SpotifyEnabled", ZealService::get_instance()->spotify->Enabled.get());
   ui->SetChecked("Zeal_SuppressMissedNotes",
                  ZealService::get_instance()->chatfilter_hook->setting_suppress_missed_notes.get());
   ui->SetChecked("Zeal_SuppressOtherFizzles",
