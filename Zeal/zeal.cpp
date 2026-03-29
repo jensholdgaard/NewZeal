@@ -38,6 +38,7 @@
 #include "melody.h"
 #include "music.h"
 #include "named_pipe.h"
+#include "spotify.h"
 #include "nameplate.h"
 #include "netstat.h"
 #include "npc_give.h"
@@ -134,6 +135,7 @@ ZealService::ZealService() {
   outputfile = MakeCheckedUnique(OutputFile);
   movement = MakeCheckedUnique(PlayerMovement);
   music = MakeCheckedUnique(MusicManager);
+  spotify = MakeCheckedUnique(SpotifyController);
   alarm = MakeCheckedUnique(Alarm);
   melody = MakeCheckedUnique(Melody);
   autofire = MakeCheckedUnique(AutoFire);
@@ -353,6 +355,55 @@ void ZealService::AddCommands() {
               alarm->Halt();
               return true;
             }
+          }
+        }
+        return false;
+      });
+
+  commands_hook->Add(
+      "/spotify", {},
+      "Control Spotify integration via librespot. Usage: /spotify [start|stop|status|bitrate|device]",
+      [this](std::vector<std::string> &args) {
+        if (args.size() == 1) {
+          std::ostringstream oss;
+          oss << "-- SPOTIFY COMMANDS --" << std::endl
+              << "/spotify start - Start librespot process" << std::endl
+              << "/spotify stop - Stop librespot process" << std::endl
+              << "/spotify status - Show current status" << std::endl
+              << "/spotify bitrate [96|160|320] - Set audio bitrate" << std::endl
+              << "/spotify device [name] - Set Spotify Connect device name" << std::endl;
+          Zeal::Game::print_chat(oss.str());
+          return true;
+        }
+        if (args.size() >= 2) {
+          if (Zeal::String::compare_insensitive(args[1], "start")) {
+            spotify->Start();
+            return true;
+          } else if (Zeal::String::compare_insensitive(args[1], "stop")) {
+            spotify->Stop();
+            return true;
+          } else if (Zeal::String::compare_insensitive(args[1], "status")) {
+            spotify->PrintStatus();
+            return true;
+          } else if (Zeal::String::compare_insensitive(args[1], "bitrate") && args.size() == 3) {
+            int bitrate = 0;
+            if (Zeal::String::tryParse(args[2], &bitrate) &&
+                (bitrate == 96 || bitrate == 160 || bitrate == 320)) {
+              spotify->Bitrate.set(bitrate);
+              Zeal::Game::print_chat("[Spotify] Bitrate set to %d. Restart to apply.", bitrate);
+            } else {
+              Zeal::Game::print_chat("[Spotify] Invalid bitrate. Use 96, 160, or 320.");
+            }
+            return true;
+          } else if (Zeal::String::compare_insensitive(args[1], "device") && args.size() >= 3) {
+            std::string name;
+            for (size_t i = 2; i < args.size(); i++) {
+              if (i > 2) name += " ";
+              name += args[i];
+            }
+            spotify->DeviceName.set(name);
+            Zeal::Game::print_chat("[Spotify] Device name set to: %s. Restart to apply.", name.c_str());
+            return true;
           }
         }
         return false;

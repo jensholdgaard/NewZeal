@@ -82,6 +82,7 @@
     <ClInclude Include="json.hpp" />
     <ClInclude Include="helm_manager.h" />
     <ClInclude Include="music.h" />
+    <ClInclude Include="spotify.h" />
     <ClInclude Include="raid_bars.h" />
     <ClInclude Include="raid_bars_manage.h" />
     <ClInclude Include="survey.h" />
@@ -165,6 +166,7 @@
     <ClCompile Include="helm_manager.cpp" />
     <ClCompile Include="items.cpp" />
     <ClCompile Include="music.cpp" />
+    <ClCompile Include="spotify.cpp" />
     <ClCompile Include="raid_bars.cpp" />
     <ClCompile Include="raid_bars_manage.cpp" />
     <ClCompile Include="survey.cpp" />
