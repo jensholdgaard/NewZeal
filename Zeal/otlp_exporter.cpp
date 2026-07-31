@@ -53,36 +53,6 @@ const char *class_name(int class_id) {
   }
 }
 
-// Builds the OTLP resource attributes shared by all signals: the service identity plus, when in
-// game, the character context (identity + slowly-changing stats). Per OTLP guidance this belongs on
-// the Resource — it is low cardinality, describes the entity producing telemetry, and enriches logs
-// and metrics alike without inflating metric attribute cardinality.
-nlohmann::json build_resource_attributes() {
-  nlohmann::json attrs = nlohmann::json::array();
-  attrs.push_back(string_attr("service.name", "everquest"));
-  attrs.push_back(string_attr("service.version", ZEAL_VERSION));
-  attrs.push_back(string_attr("telemetry.sdk.name", "zeal"));
-
-  Zeal::GameStructures::GAMECHARINFO *ci = Zeal::Game::get_char_info();
-  if (Zeal::Game::is_in_game() && ci) {
-    // Character name doubles as the service instance id so a shared backend can tell players apart.
-    attrs.push_back(string_attr("service.instance.id", ci->Name));
-    attrs.push_back(string_attr("eq.character.name", ci->Name));
-    attrs.push_back(string_attr("eq.character.class", class_name(ci->Class)));
-    attrs.push_back(int_attr("eq.character.level", ci->Level));
-    attrs.push_back(int_attr("eq.character.deity", ci->Deity));
-    attrs.push_back(int_attr("eq.character.aa.unspent", ci->AlternateAdvancementUnspent));
-    attrs.push_back(int_attr("eq.character.stat.strength", ci->BaseSTR));
-    attrs.push_back(int_attr("eq.character.stat.stamina", ci->BaseSTA));
-    attrs.push_back(int_attr("eq.character.stat.dexterity", ci->BaseDEX));
-    attrs.push_back(int_attr("eq.character.stat.agility", ci->BaseAGI));
-    attrs.push_back(int_attr("eq.character.stat.wisdom", ci->BaseWIS));
-    attrs.push_back(int_attr("eq.character.stat.intelligence", ci->BaseINT));
-    attrs.push_back(int_attr("eq.character.stat.charisma", ci->BaseCHA));
-  }
-  return attrs;
-}
-
 // Parses an EverQuest combat log line for damage the player is directly involved in and, if found,
 // fills direction ("outgoing"/"incoming"), type (the melee verb or "spell"), and amount. Returns
 // false for lines that aren't self-involved damage (e.g. a group member's hits) so they aren't
@@ -134,6 +104,10 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
     long long amount = 0;
     if (parse_combat_line(data, direction, type, amount)) record_combat_damage(direction, type, amount);
   });
+
+  // Sample live game state on the game thread (MainLoop); the sender thread only ever serializes the
+  // cached snapshot, so it never races the game thread reading/freeing character structures.
+  zeal->callbacks->AddGeneric([this]() { sample_game_state(); });
 
   zeal->commands_hook->Add("/otlp", {}, "OTLP/HTTP telemetry export. Usage: /otlp on|off|status|endpoint <url>",
                            [this](std::vector<std::string> &args) {
@@ -242,6 +216,81 @@ void OtlpExporter::worker_loop() {
   }
 }
 
+void OtlpExporter::sample_game_state() {
+  if (!setting_enabled.get()) return;  // No need to read game memory while export is off.
+
+  Snapshot s;
+  Zeal::GameStructures::GAMECHARINFO *ci = Zeal::Game::get_char_info();
+  if (Zeal::Game::is_in_game() && ci) {
+    s.in_game = true;
+    s.name = ci->Name;
+    s.class_name = class_name(ci->Class);
+    s.level = ci->Level;
+    s.deity = ci->Deity;
+    s.aa_unspent = ci->AlternateAdvancementUnspent;
+    s.str = ci->BaseSTR;
+    s.sta = ci->BaseSTA;
+    s.dex = ci->BaseDEX;
+    s.agi = ci->BaseAGI;
+    s.wis = ci->BaseWIS;
+    s.intel = ci->BaseINT;
+    s.cha = ci->BaseCHA;
+
+    ZealService *zeal = ZealService::get_instance();
+    std::string offense;
+    if (zeal->labels_hook && zeal->labels_hook->GetLabel(23, offense)) {  // 23 = CurrentOffense (attack rating).
+      s.have_attack = true;
+      s.attack = atoll(offense.c_str());
+    }
+    Zeal::GameStructures::Entity *self = Zeal::Game::get_self();
+    if (self) {
+      // ModifyAttackSpeed applies total effective haste (worn + spell + overhaste) to a reference
+      // delay; derive the haste percentage from the ratio.
+      unsigned int modified = self->ModifyAttackSpeed(1000, 0);
+      long long haste = (modified > 0) ? static_cast<long long>((1000.0 - modified) * 100.0 / modified + 0.5) : 0;
+      s.have_haste = true;
+      s.haste = haste < 0 ? 0 : haste;
+    }
+  }
+
+  std::lock_guard<std::mutex> lock(snapshot_mutex);
+  snapshot = std::move(s);
+}
+
+// Builds the OTLP resource attributes shared by all signals from the cached snapshot: the service
+// identity plus, when in game, the character context (identity + slowly-changing stats). Per OTLP
+// guidance this belongs on the Resource — low cardinality, describes the entity producing telemetry,
+// and enriches logs and metrics alike without inflating metric attribute cardinality.
+nlohmann::json OtlpExporter::build_resource_attributes() const {
+  nlohmann::json attrs = nlohmann::json::array();
+  attrs.push_back(string_attr("service.name", "everquest"));
+  attrs.push_back(string_attr("service.version", ZEAL_VERSION));
+  attrs.push_back(string_attr("telemetry.sdk.name", "zeal"));
+
+  Snapshot s;
+  {
+    std::lock_guard<std::mutex> lock(snapshot_mutex);
+    s = snapshot;
+  }
+  if (s.in_game) {
+    // Character name doubles as the service instance id so a shared backend can tell players apart.
+    attrs.push_back(string_attr("service.instance.id", s.name));
+    attrs.push_back(string_attr("eq.character.name", s.name));
+    attrs.push_back(string_attr("eq.character.class", s.class_name));
+    attrs.push_back(int_attr("eq.character.level", s.level));
+    attrs.push_back(int_attr("eq.character.deity", s.deity));
+    attrs.push_back(int_attr("eq.character.aa.unspent", s.aa_unspent));
+    attrs.push_back(int_attr("eq.character.stat.strength", s.str));
+    attrs.push_back(int_attr("eq.character.stat.stamina", s.sta));
+    attrs.push_back(int_attr("eq.character.stat.dexterity", s.dex));
+    attrs.push_back(int_attr("eq.character.stat.agility", s.agi));
+    attrs.push_back(int_attr("eq.character.stat.wisdom", s.wis));
+    attrs.push_back(int_attr("eq.character.stat.intelligence", s.intel));
+    attrs.push_back(int_attr("eq.character.stat.charisma", s.cha));
+  }
+  return attrs;
+}
+
 std::string OtlpExporter::build_logs_payload(const std::vector<LogRecord> &records) const {
   nlohmann::json log_records = nlohmann::json::array();
   for (const auto &r : records) {
@@ -308,22 +357,15 @@ std::string OtlpExporter::build_metrics_payload() {
     metrics.push_back(metric);
   }
 
-  // Attack (offense) and haste gauges for DPS correlation, sampled at flush time.
-  if (Zeal::Game::is_in_game() && Zeal::Game::get_char_info()) {
-    ZealService *zeal = ZealService::get_instance();
-    std::string offense;
-    if (zeal->labels_hook && zeal->labels_hook->GetLabel(23, offense))  // 23 = CurrentOffense (attack rating).
-      metrics.push_back(gauge_metric("eq.character.attack", "1", now, atoll(offense.c_str())));
-
-    Zeal::GameStructures::Entity *self = Zeal::Game::get_self();
-    if (self) {
-      // ModifyAttackSpeed applies total effective haste (worn + spell + overhaste) to a reference
-      // delay; derive the haste percentage from the ratio.
-      unsigned int modified = self->ModifyAttackSpeed(1000, 0);
-      long long haste = (modified > 0) ? static_cast<long long>((1000.0 - modified) * 100.0 / modified + 0.5) : 0;
-      if (haste < 0) haste = 0;
-      metrics.push_back(gauge_metric("eq.character.haste", "%", now, haste));
+  // Attack (offense) and haste gauges for DPS correlation, read from the game-thread snapshot.
+  {
+    Snapshot s;
+    {
+      std::lock_guard<std::mutex> lock(snapshot_mutex);
+      s = snapshot;
     }
+    if (s.have_attack) metrics.push_back(gauge_metric("eq.character.attack", "1", now, s.attack));
+    if (s.have_haste) metrics.push_back(gauge_metric("eq.character.haste", "%", now, s.haste));
   }
 
   if (metrics.empty()) return "";
@@ -359,6 +401,9 @@ bool OtlpExporter::post_json(const std::string &path, const std::string &json_bo
   HINTERNET session = WinHttpOpen(L"Zeal-OTLP/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME,
                                   WINHTTP_NO_PROXY_BYPASS, 0);
   if (session) {
+    // Bound every phase so a slow/unreachable endpoint can't hang the sender thread (and thus the
+    // join() on shutdown). Values in ms: resolve, connect, send, receive.
+    WinHttpSetTimeouts(session, 2000, 2000, 2000, 3000);
     HINTERNET connect = WinHttpConnect(session, host, uc.nPort, 0);
     if (connect) {
       DWORD flags = (uc.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;

@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "json.hpp"
 #include "zeal_settings.h"
 
 // OtlpExporter emits telemetry from Zeal directly over OTLP/HTTP using the JSON encoding, so the
@@ -40,11 +41,29 @@ class OtlpExporter {
     int zone_id = -1;
   };
 
+  // Cached game-state read on the game thread and consumed by the sender thread, so the sender never
+  // touches live game memory (which the game thread may be mutating/freeing during zone/camp/logout).
+  struct Snapshot {
+    bool in_game = false;
+    std::string name;
+    const char *class_name = "Unknown";
+    int level = 0, deity = 0, aa_unspent = 0;
+    int str = 0, sta = 0, dex = 0, agi = 0, wis = 0, intel = 0, cha = 0;
+    bool have_attack = false;
+    long long attack = 0;
+    bool have_haste = false;
+    long long haste = 0;
+  };
+
   static constexpr int kMinFlushMs = 100;  // Floor on the flush interval; metrics are periodic snapshots.
+
+  // Runs on the game thread (MainLoop callback); refreshes `snapshot`.
+  void sample_game_state();
 
   void worker_loop();
   bool post_json(const std::string &path, const std::string &json_body);
   std::string build_logs_payload(const std::vector<LogRecord> &records) const;
+  nlohmann::json build_resource_attributes() const;
 
   // Accumulates the `eq.combat.damage` counter, keyed by {direction, damage_type}.
   void record_combat_damage(const std::string &direction, const std::string &type, long long amount);
@@ -72,4 +91,7 @@ class OtlpExporter {
   std::atomic<unsigned long long> metrics_posted{0};
   std::atomic<unsigned long long> failed_posts{0};
   std::atomic<int> last_http_status{0};
+
+  mutable std::mutex snapshot_mutex;
+  Snapshot snapshot;
 };
