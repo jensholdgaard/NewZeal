@@ -33,6 +33,13 @@ unsigned long long now_unix_nano() {
       .count();
 }
 
+// Full zone name of the local player ("" when not resolvable). Game thread only.
+std::string current_zone_name() {
+  Zeal::GameStructures::Entity *self = Zeal::Game::get_self();
+  if (!Zeal::Game::is_in_game() || !self) return "";
+  return Zeal::Game::get_full_zone_name(self->ZoneId);
+}
+
 const char *class_name(int class_id) {
   switch (class_id) {
     case 1: return "Warrior";
@@ -257,6 +264,7 @@ void OtlpExporter::sample_game_state() {
   if (Zeal::Game::is_in_game() && ci) {
     s.in_game = true;
     s.name = ci->Name;
+    s.zone = current_zone_name();
     s.class_name = class_name(ci->Class);
     s.level = ci->Level;
     s.deity = ci->Deity;
@@ -363,13 +371,15 @@ bool OtlpExporter::in_combat_scope(const std::string &source) const {
 
 void OtlpExporter::record_combat_damage(const std::string &source, const std::string &source_type,
                                         const std::string &direction, const std::string &type, long long amount) {
+  const std::string zone = current_zone_name();  // where the hit happened (game thread)
   std::lock_guard<std::mutex> lock(metrics_mutex);
-  combat_damage[{source, source_type, direction, type}] += amount;
+  combat_damage[{source, source_type, direction, type, zone}] += amount;
 }
 
 void OtlpExporter::record_heal(const std::string &source, const std::string &direction, long long amount) {
+  const std::string zone = current_zone_name();
   std::lock_guard<std::mutex> lock(metrics_mutex);
-  combat_heal[{source, direction}] += amount;
+  combat_heal[{source, direction, zone}] += amount;
 }
 
 // Extracts the positive integer that starts at line[pos] (returns 0 if none).
@@ -425,9 +435,11 @@ void OtlpExporter::parse_dot_or_heal(const std::string &line) {
   }
 }
 
-// Builds a single-value gauge metric (no attributes) as an OTLP metric object.
-static nlohmann::json gauge_metric(const char *name, const char *unit, const std::string &now, long long value) {
+// Builds a single-value gauge metric as an OTLP metric object (zone attached when known).
+static nlohmann::json gauge_metric(const char *name, const char *unit, const std::string &now, long long value,
+                                   const std::string &zone) {
   nlohmann::json point = {{"timeUnixNano", now}, {"asInt", std::to_string(value)}};
+  if (!zone.empty()) point["attributes"] = {string_attr("eq.zone.name", zone)};
   nlohmann::json metric;
   metric["name"] = name;
   metric["unit"] = unit;
@@ -449,7 +461,8 @@ std::string OtlpExporter::build_metrics_payload() {
                               {string_attr("eq.combat.source", std::get<0>(key)),
                                string_attr("eq.combat.source_type", std::get<1>(key)),
                                string_attr("eq.combat.direction", std::get<2>(key)),
-                               string_attr("eq.combat.damage.type", std::get<3>(key))}},
+                               string_attr("eq.combat.damage.type", std::get<3>(key)),
+                               string_attr("eq.zone.name", std::get<4>(key))}},
                              {"startTimeUnixNano", start},
                              {"timeUnixNano", now},
                              {"asInt", std::to_string(total)}});
@@ -469,8 +482,9 @@ std::string OtlpExporter::build_metrics_payload() {
     std::lock_guard<std::mutex> lock(metrics_mutex);
     for (const auto &[key, total] : combat_heal) {
       heal_points.push_back({{"attributes",
-                              {string_attr("eq.combat.source", key.first),
-                               string_attr("eq.combat.direction", key.second)}},
+                              {string_attr("eq.combat.source", std::get<0>(key)),
+                               string_attr("eq.combat.direction", std::get<1>(key)),
+                               string_attr("eq.zone.name", std::get<2>(key))}},
                              {"startTimeUnixNano", start},
                              {"timeUnixNano", now},
                              {"asInt", std::to_string(total)}});
@@ -491,8 +505,8 @@ std::string OtlpExporter::build_metrics_payload() {
       std::lock_guard<std::mutex> lock(snapshot_mutex);
       s = snapshot;
     }
-    if (s.have_attack) metrics.push_back(gauge_metric("eq.character.attack", "1", now, s.attack));
-    if (s.have_haste) metrics.push_back(gauge_metric("eq.character.haste", "%", now, s.haste));
+    if (s.have_attack) metrics.push_back(gauge_metric("eq.character.attack", "1", now, s.attack, s.zone));
+    if (s.have_haste) metrics.push_back(gauge_metric("eq.character.haste", "%", now, s.haste, s.zone));
   }
 
   if (metrics.empty()) return "";

@@ -47,6 +47,7 @@ class OtlpExporter {
   struct Snapshot {
     bool in_game = false;
     std::string name;
+    std::string zone;  // full zone name, e.g. "Mons Letalis"
     const char *class_name = "Unknown";
     int level = 0, deity = 0, aa_unspent = 0;
     int str = 0, sta = 0, dex = 0, agi = 0, wis = 0, intel = 0, cha = 0;
@@ -66,12 +67,12 @@ class OtlpExporter {
   std::string build_logs_payload(const std::vector<LogRecord> &records) const;
   nlohmann::json build_resource_attributes() const;
 
-  // Accumulates the `eq.combat.damage` counter, keyed by {source, source_type, direction, damage_type}.
+  // Accumulates the `eq.combat.damage` counter, keyed by {source, source_type, direction, damage_type, zone}.
   void record_combat_damage(const std::string &source, const std::string &source_type, const std::string &direction,
                             const std::string &type, long long amount);
   // Parses caster-side DoT ticks and heal messages from a chat line (they have no hit event).
   void parse_dot_or_heal(const std::string &line);
-  // Accumulates the `eq.combat.heal` counter, keyed by {source, direction}.
+  // Accumulates the `eq.combat.heal` counter, keyed by {source, direction, zone}.
   void record_heal(const std::string &source, const std::string &direction, long long amount);
   // True if `source` should be recorded given the current scope setting (self+pet vs all attackers).
   bool in_combat_scope(const std::string &source) const;
@@ -92,10 +93,10 @@ class OtlpExporter {
   // Fixed start time for cumulative metric streams (set at construction).
   unsigned long long start_time_unix_nano = 0;
   std::mutex metrics_mutex;
-  // {source, source_type, direction, type} -> total hitpoints.
-  std::map<std::tuple<std::string, std::string, std::string, std::string>, long long> combat_damage;
-  // {source, direction(outgoing=healing done, incoming=healing received)} -> total hitpoints.
-  std::map<std::pair<std::string, std::string>, long long> combat_heal;
+  // {source, source_type, direction, type, zone} -> total hitpoints.
+  std::map<std::tuple<std::string, std::string, std::string, std::string, std::string>, long long> combat_damage;
+  // {source, direction(outgoing=done, incoming=received), zone} -> total hitpoints.
+  std::map<std::tuple<std::string, std::string, std::string>, long long> combat_heal;
 
   // "self" = record only the local character + its pet (authoritative per-player, no double counting
   // when the whole guild reports). "all" = record every attacker seen in the log (solo experiment).
