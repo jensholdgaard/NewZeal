@@ -153,13 +153,24 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                                Zeal::Game::print_chat("OTLP endpoint set to %s", args[2].c_str());
                                return true;
                              }
+                             if (args.size() == 3 && Zeal::String::compare_insensitive(args[1], "flush")) {
+                               int ms = 0;
+                               if (!Zeal::String::tryParse(args[2], &ms)) {
+                                 Zeal::Game::print_chat("Usage: /otlp flush <milliseconds>");
+                                 return true;
+                               }
+                               if (ms < kMinFlushMs) ms = kMinFlushMs;  // Clamp: metrics are periodic; 0 would just hammer.
+                               setting_flush_ms.set(ms);
+                               Zeal::Game::print_chat("OTLP flush interval set to %ims", ms);
+                               return true;
+                             }
                              Zeal::Game::print_chat("OTLP: %s, endpoint %s, flush %ims",
                                                     setting_enabled.get() ? "enabled" : "disabled",
                                                     setting_endpoint.get().c_str(), setting_flush_ms.get());
                              Zeal::Game::print_chat("  sent: %llu log batches-worth, %llu metric posts, %llu failed",
                                                     logs_posted.load(), metrics_posted.load(), failed_posts.load());
                              Zeal::Game::print_chat("  last HTTP status: %i", last_http_status.load());
-                             Zeal::Game::print_chat("Usage: /otlp on|off|status|endpoint <url>");
+                             Zeal::Game::print_chat("Usage: /otlp on|off|status|endpoint <url>|flush <ms>");
                              return true;
                            });
 }
@@ -194,7 +205,9 @@ void OtlpExporter::worker_loop() {
     std::vector<LogRecord> batch;
     {
       std::unique_lock<std::mutex> lock(queue_mutex);
-      queue_cv.wait_for(lock, std::chrono::milliseconds(setting_flush_ms.get() > 0 ? setting_flush_ms.get() : 2000),
+      const int configured = setting_flush_ms.get();
+      const int interval = configured > 0 ? (configured < kMinFlushMs ? kMinFlushMs : configured) : 2000;
+      queue_cv.wait_for(lock, std::chrono::milliseconds(interval),
                         [this]() { return end_thread || !queue.empty(); });
       if (end_thread && queue.empty()) return;
 

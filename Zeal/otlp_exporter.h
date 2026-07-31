@@ -40,6 +40,8 @@ class OtlpExporter {
     int zone_id = -1;
   };
 
+  static constexpr int kMinFlushMs = 100;  // Floor on the flush interval; metrics are periodic snapshots.
+
   void worker_loop();
   bool post_json(const std::string &path, const std::string &json_body);
   std::string build_logs_payload(const std::vector<LogRecord> &records) const;
