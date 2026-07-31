@@ -58,82 +58,38 @@ const char *class_name(int class_id) {
 // fills direction ("outgoing"/"incoming"), type (the melee verb or "spell"), and amount. Returns
 // false for lines that aren't self-involved damage (e.g. a group member's hits) so they aren't
 // double counted. EQ renders the local player as "You"/"YOU".
-std::string trim(const std::string &s) {
-  size_t a = s.find_first_not_of(' ');
-  size_t b = s.find_last_not_of(' ');
-  return (a == std::string::npos) ? "" : s.substr(a, b - a + 1);
+// Maps an EQ melee SkillType (Damage_Struct.type) to a canonical damage-type label.
+const char *melee_type_name(unsigned short skill) {
+  using S = Zeal::GameEnums::SkillType;
+  switch (skill) {
+    case S::Skill1HSlashing:
+    case S::Skill2HSlashing:
+      return "slash";
+    case S::Skill1HBlunt:
+    case S::Skill2HBlunt:
+      return "crush";
+    case S::Skill1HPiercing:
+      return "pierce";
+    case S::SkillBash:
+      return "bash";
+    case S::SkillKick:
+    case S::SkillFlyingKick:
+    case S::SkillRoundKick:
+      return "kick";
+    case S::SkillHandtoHand:
+      return "hth";
+    case S::SkillBackstab:
+      return "backstab";
+    case S::SkillArchery:
+      return "archery";
+    case S::SkillDragonPunch:
+    case S::SkillEagleStrike:
+      return "special";
+    default:
+      return "melee";
+  }
 }
 
-// Combat verbs as they appear in EQ messages, mapped to a canonical damage type. Both the 1st-person
-// ("You slash") and 3rd-person ("Abuelo slashes") forms are listed so any attacker is recognized.
-struct CombatVerb {
-  const char *word;
-  const char *canon;
-};
-const CombatVerb kCombatVerbs[] = {
-    {"slashes", "slash"},       {"slash", "slash"},   {"crushes", "crush"},   {"crush", "crush"},
-    {"pierces", "pierce"},      {"pierce", "pierce"}, {"bashes", "bash"},     {"bash", "bash"},
-    {"kicks", "kick"},          {"kick", "kick"},     {"bites", "bite"},      {"bite", "bite"},
-    {"claws", "claw"},          {"claw", "claw"},     {"gores", "gore"},      {"gore", "gore"},
-    {"mauls", "maul"},          {"maul", "maul"},     {"punches", "punch"},   {"punch", "punch"},
-    {"backstabs", "backstab"},  {"backstab", "backstab"}, {"strikes", "strike"}, {"strike", "strike"},
-    {"smashes", "smash"},       {"smash", "smash"},   {"stings", "sting"},    {"sting", "sting"},
-    {"slices", "slice"},        {"slice", "slice"},   {"rends", "rend"},      {"rend", "rend"},
-    {"slams", "slam"},          {"slam", "slam"},     {"hits", "hit"},        {"hit", "hit"},
-};
-
-// Parses "<Source> <verb> <Target> for <N> points of [non-melee ]damage." from any attacker.
-// Fills source (attacker; "You" is normalized by the caller to the local character), direction
-// (incoming if the local player is the target, else outgoing), type (canonical verb or "non-melee"),
-// and amount. Returns false for lines that aren't attributable combat damage.
-bool parse_combat_line(const std::string &line, std::string &source, std::string &direction, std::string &type,
-                       long long &amount) {
-  size_t of = line.find(" points of ");
-  if (of == std::string::npos) of = line.find(" point of ");
-  if (of == std::string::npos || line.find("damage", of) == std::string::npos) return false;
-  const bool non_melee = line.find("non-melee", of) != std::string::npos;
-
-  // Amount: the integer immediately before " point(s) of".
-  size_t end = of;
-  while (end > 0 && line[end - 1] == ' ') end--;
-  size_t start = end;
-  while (start > 0 && isdigit(static_cast<unsigned char>(line[start - 1]))) start--;
-  if (start == end) return false;
-  amount = atoll(line.substr(start, end - start).c_str());
-  if (amount <= 0) return false;
-
-  size_t forpos = line.rfind(" for ", start);
-  if (forpos == std::string::npos) return false;
-
-  // Find the leftmost combat verb before " for " — it splits source | target.
-  size_t verb_start = std::string::npos, verb_end = std::string::npos;
-  for (const auto &v : kCombatVerbs) {
-    std::string pat = std::string(" ") + v.word + " ";
-    size_t p = line.find(pat);
-    if (p != std::string::npos && p < forpos && (verb_start == std::string::npos || p < verb_start)) {
-      verb_start = p;
-      verb_end = p + pat.size();
-      type = v.canon;
-    }
-  }
-  if (verb_start == std::string::npos) return false;
-
-  source = trim(line.substr(0, verb_start));
-  std::string target = trim(line.substr(verb_end, forpos - verb_end));
-  if (source.empty()) return false;
-  // Passive voice ("<target> was hit by non-melee for N ...") names no attacker — not attributable.
-  if (source.size() >= 4 && source.compare(source.size() - 4, 4, " was") == 0) return false;
-  if (non_melee) type = "non-melee";
-
-  const bool target_is_you = (target == "YOU" || target == "you");
-  if (source == "You") {
-    direction = "outgoing";
-    if (Zeal::Game::get_self()) source = Zeal::Game::get_self()->Name;  // attribute to the local char
-  } else {
-    direction = target_is_you ? "incoming" : "outgoing";
-  }
-  return true;
-}
 }  // namespace
 
 OtlpExporter::OtlpExporter(ZealService *zeal) {
@@ -144,14 +100,25 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
   // source (the pipe uses the same callback); registering our own keeps OTLP independent of whether
   // the pipe has a reader connected.
   zeal->chat_hook->add_print_chat_callback([this](const char *data, int color_index) {
-    if (!is_enabled() || !data) return;
-    log(data, color_index);
-    std::string source, direction, type;
-    long long amount = 0;
-    if (parse_combat_line(data, source, direction, type, amount)) {
-      std::string source_type = classify_source(source);  // may rewrite source (pet -> owner)
-      if (in_combat_scope(source)) record_combat_damage(source, source_type, direction, type, amount);
+    if (is_enabled() && data) log(data, color_index);
+  });
+
+  // Combat damage from the actual hit event (spawn IDs resolved to entities) — far more reliable than
+  // parsing chat text: exact attacker/target, damage, and skill/spell, incl. charmed pets.
+  zeal->callbacks->AddReportSuccessfulHit([this](Zeal::GameStructures::Entity *source,
+                                                 Zeal::GameStructures::Entity *target, WORD type, short spell_id,
+                                                 short damage, char) {
+    if (!is_enabled() || !source || damage <= 0) return;
+    Zeal::GameStructures::Entity *attacker = source;
+    if (attacker->PetOwnerSpawnId != 0) {  // credit a pet's damage to its owner (charmed or summoned)
+      auto *owner = ZealService::get_instance()->entity_manager->Get(attacker->PetOwnerSpawnId);
+      if (owner) attacker = owner;
     }
+    std::string src = attacker->Name;
+    const char *src_type = (attacker->Type == Zeal::GameEnums::EntityTypes::Player) ? "player" : "npc";
+    const char *direction = (target && target == Zeal::Game::get_self()) ? "incoming" : "outgoing";
+    const char *dtype = (spell_id > 0) ? "spell" : melee_type_name(type);
+    if (in_combat_scope(src)) record_combat_damage(src, src_type, direction, dtype, damage);
   });
 
   // Sample live game state on the game thread (MainLoop); the sender thread only ever serializes the
@@ -375,22 +342,6 @@ std::string OtlpExporter::build_logs_payload(const std::vector<LogRecord> &recor
   // EQ log lines can contain stray non-printable bytes; replace invalid UTF-8 rather than letting
   // dump() throw and drop the whole batch.
   return payload.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
-}
-
-std::string OtlpExporter::classify_source(std::string &source) const {
-  EntityManager *em = ZealService::get_instance()->entity_manager.get();
-  if (!em) return "unknown";
-  Zeal::GameStructures::Entity *e = em->Get(source);
-  if (!e) return "unknown";  // e.g. NPC whose display name doesn't match the spawn list — filtered out.
-  // Roll a pet's damage into its owner (what DPS meters show), using the live pet->owner link.
-  if (e->PetOwnerSpawnId != 0) {
-    Zeal::GameStructures::Entity *owner = em->Get(e->PetOwnerSpawnId);
-    if (owner) {
-      source = owner->Name;
-      e = owner;
-    }
-  }
-  return (e->Type == Zeal::GameEnums::EntityTypes::Player) ? "player" : "npc";
 }
 
 bool OtlpExporter::in_combat_scope(const std::string &source) const {

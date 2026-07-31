@@ -69,9 +69,6 @@ class OtlpExporter {
   // Accumulates the `eq.combat.damage` counter, keyed by {source, source_type, direction, damage_type}.
   void record_combat_damage(const std::string &source, const std::string &source_type, const std::string &direction,
                             const std::string &type, long long amount);
-  // Classifies an attacker via the live entity list: returns "player"/"npc"/"unknown". Pets are
-  // rolled into their owner (rewrites `source` to the owner's name), matching how DPS meters work.
-  std::string classify_source(std::string &source) const;
   // True if `source` should be recorded given the current scope setting (self+pet vs all attackers).
   bool in_combat_scope(const std::string &source) const;
   // Serializes the current cumulative counter snapshot as an OTLP metrics payload ("" if empty).
