@@ -215,19 +215,24 @@ std::string OtlpExporter::build_metrics_payload() {
   }
   if (data_points.empty()) return "";
 
-  nlohmann::json payload = {
-      {"resourceMetrics",
-       {{{"resource",
-          {{"attributes",
-            {string_attr("service.name", "everquest"), string_attr("service.version", ZEAL_VERSION),
-             string_attr("telemetry.sdk.name", "zeal")}}}},
-         {"scopeMetrics",
-          {{{"scope", {{"name", "zeal"}, {"version", ZEAL_VERSION}}},
-            {"metrics",
-             {{{"name", "eq.combat.damage"},
-               {"unit", "{hitpoint}"},
-               {"sum",
-                {{"dataPoints", data_points}, {"aggregationTemporality", 2}, {"isMonotonic", true}}}}}}}}}}}};
+  nlohmann::json metric;
+  metric["name"] = "eq.combat.damage";
+  metric["unit"] = "{hitpoint}";
+  metric["sum"] = {{"dataPoints", data_points}, {"aggregationTemporality", 2}, {"isMonotonic", true}};
+
+  nlohmann::json scope_metrics;
+  scope_metrics["scope"] = {{"name", "zeal"}, {"version", ZEAL_VERSION}};
+  scope_metrics["metrics"] = nlohmann::json::array({metric});
+
+  nlohmann::json resource_metrics;
+  resource_metrics["resource"] = {{"attributes",
+                                   {string_attr("service.name", "everquest"),
+                                    string_attr("service.version", ZEAL_VERSION),
+                                    string_attr("telemetry.sdk.name", "zeal")}}};
+  resource_metrics["scopeMetrics"] = nlohmann::json::array({scope_metrics});
+
+  nlohmann::json payload;
+  payload["resourceMetrics"] = nlohmann::json::array({resource_metrics});
   return payload.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
