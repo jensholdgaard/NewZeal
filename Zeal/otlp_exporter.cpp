@@ -130,7 +130,9 @@ std::string OtlpExporter::build_logs_payload(const std::vector<LogRecord> &recor
              string_attr("telemetry.sdk.name", "zeal")}}}},
          {"scopeLogs",
           {{{"scope", {{"name", "zeal"}, {"version", ZEAL_VERSION}}}, {"logRecords", log_records}}}}}}}};
-  return payload.dump();
+  // EQ log lines can contain stray non-printable bytes; replace invalid UTF-8 rather than letting
+  // dump() throw and drop the whole batch.
+  return payload.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
 bool OtlpExporter::post_json(const std::string &path, const std::string &json_body) {
