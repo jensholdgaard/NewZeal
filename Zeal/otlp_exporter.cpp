@@ -5,6 +5,7 @@
 #include <chrono>
 
 #include "callbacks.h"
+#include "chat.h"
 #include "commands.h"
 #include "game_functions.h"
 #include "json.hpp"
@@ -25,6 +26,12 @@ nlohmann::json int_attr(const char *key, long long value) {
 
 OtlpExporter::OtlpExporter(ZealService *zeal) {
   worker = std::thread([this]() { worker_loop(); });
+
+  // Emit every print-to-chat line as a log record. This is the live source (the pipe uses the same
+  // callback); registering our own keeps OTLP independent of whether the pipe has a reader connected.
+  zeal->chat_hook->add_print_chat_callback([this](const char *data, int color_index) {
+    if (is_enabled() && data) log(data, color_index);
+  });
 
   zeal->commands_hook->Add("/otlp", {}, "OTLP/HTTP telemetry export. Usage: /otlp on|off|status|endpoint <url>",
                            [this](std::vector<std::string> &args) {
