@@ -93,6 +93,7 @@ class ZealService {
   std::unique_ptr<class Survey> survey = nullptr;
 
   std::unique_ptr<class NamedPipe> pipe = nullptr;
+  std::unique_ptr<class OtlpExporter> otlp = nullptr;
 
  private:
   void AddCommands();  // Registers module dependent chat commands.

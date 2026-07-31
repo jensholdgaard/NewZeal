@@ -14,6 +14,7 @@
 #include "game_structures.h"
 #include "hook_wrapper.h"
 #include "labels.h"
+#include "otlp_exporter.h"
 #include "string_util.h"
 #include "tick.h"
 #include "zeal.h"
@@ -163,6 +164,7 @@ void log_hook(char *data) {
     pipe_data pd(pipe_data_type::log, data);
     zeal->pipe->write(pd.serialize().dump());
   }
+  if (zeal->otlp && zeal->otlp->is_enabled()) zeal->otlp->log(data, 0);
   zeal->hooks->hook_map["logtextfile"]->original(log_hook)(data);
 }
 
