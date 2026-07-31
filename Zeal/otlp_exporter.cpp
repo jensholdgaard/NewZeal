@@ -2,6 +2,7 @@
 
 #include <winhttp.h>
 
+#include <cctype>
 #include <chrono>
 
 #include "callbacks.h"
@@ -22,15 +23,62 @@ nlohmann::json string_attr(const char *key, const std::string &value) {
 nlohmann::json int_attr(const char *key, long long value) {
   return {{"key", key}, {"value", {{"intValue", std::to_string(value)}}}};
 }
+
+unsigned long long now_unix_nano() {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch())
+      .count();
+}
+
+// Parses an EverQuest combat log line for damage the player is directly involved in and, if found,
+// fills direction ("outgoing"/"incoming"), type (the melee verb or "spell"), and amount. Returns
+// false for lines that aren't self-involved damage (e.g. a group member's hits) so they aren't
+// double counted. EQ renders the local player as "You"/"YOU".
+bool parse_combat_line(const std::string &line, std::string &direction, std::string &type, long long &amount) {
+  size_t dmg = line.find("of damage");
+  if (dmg == std::string::npos) return false;
+  size_t pts = line.rfind("point", dmg);  // matches "point" and "points"
+  if (pts == std::string::npos) return false;
+
+  size_t end = pts;
+  while (end > 0 && line[end - 1] == ' ') end--;
+  size_t start = end;
+  while (start > 0 && isdigit(static_cast<unsigned char>(line[start - 1]))) start--;
+  if (start == end) return false;
+  amount = atoll(line.substr(start, end - start).c_str());
+  if (amount <= 0) return false;
+
+  if (line.rfind("You have taken ", 0) == 0) {
+    direction = "incoming";
+    type = "spell";  // "You have taken N points of damage from ..."
+  } else if (line.rfind("You ", 0) == 0) {
+    direction = "outgoing";
+    size_t vstart = 4;
+    size_t vend = line.find(' ', vstart);
+    type = (vend == std::string::npos) ? "melee" : line.substr(vstart, vend - vstart);
+  } else if (line.find(" YOU ") != std::string::npos) {
+    direction = "incoming";
+    type = "melee";
+  } else {
+    return false;  // Not self-involved; skip.
+  }
+  for (auto &c : type) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+  return true;
+}
 }  // namespace
 
 OtlpExporter::OtlpExporter(ZealService *zeal) {
+  start_time_unix_nano = now_unix_nano();
   worker = std::thread([this]() { worker_loop(); });
 
-  // Emit every print-to-chat line as a log record. This is the live source (the pipe uses the same
-  // callback); registering our own keeps OTLP independent of whether the pipe has a reader connected.
+  // Emit every print-to-chat line as a log record and mine it for combat damage. This is the live
+  // source (the pipe uses the same callback); registering our own keeps OTLP independent of whether
+  // the pipe has a reader connected.
   zeal->chat_hook->add_print_chat_callback([this](const char *data, int color_index) {
-    if (is_enabled() && data) log(data, color_index);
+    if (!is_enabled() || !data) return;
+    log(data, color_index);
+    std::string direction, type;
+    long long amount = 0;
+    if (parse_combat_line(data, direction, type, amount)) record_combat_damage(direction, type, amount);
   });
 
   zeal->commands_hook->Add("/otlp", {}, "OTLP/HTTP telemetry export. Usage: /otlp on|off|status|endpoint <url>",
@@ -72,8 +120,7 @@ void OtlpExporter::log(const std::string &body, int color_index) {
   if (!setting_enabled.get() || body.empty()) return;
 
   LogRecord record;
-  record.time_unix_nano =
-      std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+  record.time_unix_nano = now_unix_nano();
   record.body = body;
   record.color_index = color_index;
   if (Zeal::Game::is_in_game() && Zeal::Game::get_self()) {
@@ -104,12 +151,16 @@ void OtlpExporter::worker_loop() {
       }
     }
 
-    if (batch.empty() || !setting_enabled.get()) continue;
+    if (!setting_enabled.get()) continue;
 
     try {
-      post_json("/v1/logs", build_logs_payload(batch));
+      if (!batch.empty()) post_json("/v1/logs", build_logs_payload(batch));
+      // Metrics use cumulative temporality, so emit the current snapshot every flush even when no
+      // new log lines arrived this cycle.
+      std::string metrics = build_metrics_payload();
+      if (!metrics.empty()) post_json("/v1/metrics", metrics);
     } catch (const std::exception &) {
-      // Never let telemetry take down the game; drop the batch on failure.
+      // Never let telemetry take down the game; drop this cycle on failure.
     }
   }
 }
@@ -139,6 +190,44 @@ std::string OtlpExporter::build_logs_payload(const std::vector<LogRecord> &recor
           {{{"scope", {{"name", "zeal"}, {"version", ZEAL_VERSION}}}, {"logRecords", log_records}}}}}}}};
   // EQ log lines can contain stray non-printable bytes; replace invalid UTF-8 rather than letting
   // dump() throw and drop the whole batch.
+  return payload.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+}
+
+void OtlpExporter::record_combat_damage(const std::string &direction, const std::string &type, long long amount) {
+  std::lock_guard<std::mutex> lock(metrics_mutex);
+  combat_damage[{direction, type}] += amount;
+}
+
+std::string OtlpExporter::build_metrics_payload() {
+  nlohmann::json data_points = nlohmann::json::array();
+  const std::string now = std::to_string(now_unix_nano());
+  const std::string start = std::to_string(start_time_unix_nano);
+  {
+    std::lock_guard<std::mutex> lock(metrics_mutex);
+    for (const auto &[key, total] : combat_damage) {
+      data_points.push_back({{"attributes",
+                              {string_attr("eq.combat.direction", key.first),
+                               string_attr("eq.combat.damage.type", key.second)}},
+                             {"startTimeUnixNano", start},
+                             {"timeUnixNano", now},
+                             {"asInt", std::to_string(total)}});
+    }
+  }
+  if (data_points.empty()) return "";
+
+  nlohmann::json payload = {
+      {"resourceMetrics",
+       {{{"resource",
+          {{"attributes",
+            {string_attr("service.name", "everquest"), string_attr("service.version", ZEAL_VERSION),
+             string_attr("telemetry.sdk.name", "zeal")}}}},
+         {"scopeMetrics",
+          {{{"scope", {{"name", "zeal"}, {"version", ZEAL_VERSION}}},
+            {"metrics",
+             {{{"name", "eq.combat.damage"},
+               {"unit", "{hitpoint}"},
+               {"sum",
+                {{"dataPoints", data_points}, {"aggregationTemporality", 2}, {"isMonotonic", true}}}}}}}}}}}};
   return payload.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 

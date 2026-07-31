@@ -3,9 +3,11 @@
 
 #include <condition_variable>
 #include <deque>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "zeal_settings.h"
@@ -42,6 +44,11 @@ class OtlpExporter {
   bool post_json(const std::string &path, const std::string &json_body);
   std::string build_logs_payload(const std::vector<LogRecord> &records) const;
 
+  // Accumulates the `eq.combat.damage` counter, keyed by {direction, damage_type}.
+  void record_combat_damage(const std::string &direction, const std::string &type, long long amount);
+  // Serializes the current cumulative counter snapshot as an OTLP metrics payload ("" if empty).
+  std::string build_metrics_payload();
+
   ZealSetting<bool> setting_enabled = {false, "Zeal", "OtlpEnabled", false};
   ZealSetting<std::string> setting_endpoint = {"http://127.0.0.1:4318", "Zeal", "OtlpEndpoint", false};
   ZealSetting<int> setting_flush_ms = {2000, "Zeal", "OtlpFlushMs", false};
@@ -52,4 +59,9 @@ class OtlpExporter {
   std::condition_variable queue_cv;
   std::thread worker;
   bool end_thread = false;
+
+  // Fixed start time for cumulative metric streams (set at construction).
+  unsigned long long start_time_unix_nano = 0;
+  std::mutex metrics_mutex;
+  std::map<std::pair<std::string, std::string>, long long> combat_damage;  // {direction, type} -> total
 };
