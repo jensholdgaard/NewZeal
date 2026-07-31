@@ -65,6 +65,8 @@ nlohmann::json build_resource_attributes() {
 
   Zeal::GameStructures::GAMECHARINFO *ci = Zeal::Game::get_char_info();
   if (Zeal::Game::is_in_game() && ci) {
+    // Character name doubles as the service instance id so a shared backend can tell players apart.
+    attrs.push_back(string_attr("service.instance.id", ci->Name));
     attrs.push_back(string_attr("eq.character.name", ci->Name));
     attrs.push_back(string_attr("eq.character.class", class_name(ci->Class)));
     attrs.push_back(int_attr("eq.character.level", ci->Level));
@@ -154,6 +156,9 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                              Zeal::Game::print_chat("OTLP: %s, endpoint %s, flush %ims",
                                                     setting_enabled.get() ? "enabled" : "disabled",
                                                     setting_endpoint.get().c_str(), setting_flush_ms.get());
+                             Zeal::Game::print_chat("  sent: %llu log batches-worth, %llu metric posts, %llu failed",
+                                                    logs_posted.load(), metrics_posted.load(), failed_posts.load());
+                             Zeal::Game::print_chat("  last HTTP status: %i", last_http_status.load());
                              Zeal::Game::print_chat("Usage: /otlp on|off|status|endpoint <url>");
                              return true;
                            });
@@ -175,10 +180,7 @@ void OtlpExporter::log(const std::string &body, int color_index) {
   record.time_unix_nano = now_unix_nano();
   record.body = body;
   record.color_index = color_index;
-  if (Zeal::Game::is_in_game() && Zeal::Game::get_self()) {
-    record.character = Zeal::Game::get_self()->Name;
-    record.zone_id = Zeal::Game::get_self()->ZoneId;
-  }
+  if (Zeal::Game::is_in_game() && Zeal::Game::get_self()) record.zone_id = Zeal::Game::get_self()->ZoneId;
 
   {
     std::lock_guard<std::mutex> lock(queue_mutex);
@@ -206,11 +208,21 @@ void OtlpExporter::worker_loop() {
     if (!setting_enabled.get()) continue;
 
     try {
-      if (!batch.empty()) post_json("/v1/logs", build_logs_payload(batch));
+      if (!batch.empty()) {
+        if (post_json("/v1/logs", build_logs_payload(batch)))
+          logs_posted += batch.size();
+        else
+          failed_posts++;
+      }
       // Metrics use cumulative temporality, so emit the current snapshot every flush even when no
       // new log lines arrived this cycle.
       std::string metrics = build_metrics_payload();
-      if (!metrics.empty()) post_json("/v1/metrics", metrics);
+      if (!metrics.empty()) {
+        if (post_json("/v1/metrics", metrics))
+          metrics_posted++;
+        else
+          failed_posts++;
+      }
     } catch (const std::exception &) {
       // Never let telemetry take down the game; drop this cycle on failure.
     }
@@ -347,6 +359,7 @@ bool OtlpExporter::post_json(const std::string &path, const std::string &json_bo
           DWORD status = 0, size = sizeof(status);
           WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX,
                               &status, &size, WINHTTP_NO_HEADER_INDEX);
+          last_http_status.store(static_cast<int>(status));
           ok = (status >= 200 && status < 300);
         }
         WinHttpCloseHandle(request);

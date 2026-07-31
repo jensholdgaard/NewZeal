@@ -1,6 +1,7 @@
 #pragma once
 #include <Windows.h>
 
+#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <map>
@@ -36,7 +37,6 @@ class OtlpExporter {
     unsigned long long time_unix_nano = 0;
     std::string body;
     int color_index = 0;
-    std::string character;
     int zone_id = -1;
   };
 
@@ -64,4 +64,10 @@ class OtlpExporter {
   unsigned long long start_time_unix_nano = 0;
   std::mutex metrics_mutex;
   std::map<std::pair<std::string, std::string>, long long> combat_damage;  // {direction, type} -> total
+
+  // Lightweight send stats surfaced by `/otlp status`.
+  std::atomic<unsigned long long> logs_posted{0};
+  std::atomic<unsigned long long> metrics_posted{0};
+  std::atomic<unsigned long long> failed_posts{0};
+  std::atomic<int> last_http_status{0};
 };
