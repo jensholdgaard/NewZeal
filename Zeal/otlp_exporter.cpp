@@ -4,12 +4,15 @@
 
 #include <cctype>
 #include <chrono>
+#include <cstdlib>
 
 #include "callbacks.h"
 #include "chat.h"
 #include "commands.h"
 #include "game_functions.h"
+#include "game_structures.h"
 #include "json.hpp"
+#include "labels.h"
 #include "string_util.h"
 #include "zeal.h"
 
@@ -27,6 +30,55 @@ nlohmann::json int_attr(const char *key, long long value) {
 unsigned long long now_unix_nano() {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch())
       .count();
+}
+
+const char *class_name(int class_id) {
+  switch (class_id) {
+    case 1: return "Warrior";
+    case 2: return "Cleric";
+    case 3: return "Paladin";
+    case 4: return "Ranger";
+    case 5: return "Shadowknight";
+    case 6: return "Druid";
+    case 7: return "Monk";
+    case 8: return "Bard";
+    case 9: return "Rogue";
+    case 10: return "Shaman";
+    case 11: return "Necromancer";
+    case 12: return "Wizard";
+    case 13: return "Magician";
+    case 14: return "Enchanter";
+    case 15: return "Beastlord";
+    default: return "Unknown";
+  }
+}
+
+// Builds the OTLP resource attributes shared by all signals: the service identity plus, when in
+// game, the character context (identity + slowly-changing stats). Per OTLP guidance this belongs on
+// the Resource — it is low cardinality, describes the entity producing telemetry, and enriches logs
+// and metrics alike without inflating metric attribute cardinality.
+nlohmann::json build_resource_attributes() {
+  nlohmann::json attrs = nlohmann::json::array();
+  attrs.push_back(string_attr("service.name", "everquest"));
+  attrs.push_back(string_attr("service.version", ZEAL_VERSION));
+  attrs.push_back(string_attr("telemetry.sdk.name", "zeal"));
+
+  Zeal::GameStructures::GAMECHARINFO *ci = Zeal::Game::get_char_info();
+  if (Zeal::Game::is_in_game() && ci) {
+    attrs.push_back(string_attr("eq.character.name", ci->Name));
+    attrs.push_back(string_attr("eq.character.class", class_name(ci->Class)));
+    attrs.push_back(int_attr("eq.character.level", ci->Level));
+    attrs.push_back(int_attr("eq.character.deity", ci->Deity));
+    attrs.push_back(int_attr("eq.character.aa.unspent", ci->AlternateAdvancementUnspent));
+    attrs.push_back(int_attr("eq.character.stat.strength", ci->BaseSTR));
+    attrs.push_back(int_attr("eq.character.stat.stamina", ci->BaseSTA));
+    attrs.push_back(int_attr("eq.character.stat.dexterity", ci->BaseDEX));
+    attrs.push_back(int_attr("eq.character.stat.agility", ci->BaseAGI));
+    attrs.push_back(int_attr("eq.character.stat.wisdom", ci->BaseWIS));
+    attrs.push_back(int_attr("eq.character.stat.intelligence", ci->BaseINT));
+    attrs.push_back(int_attr("eq.character.stat.charisma", ci->BaseCHA));
+  }
+  return attrs;
 }
 
 // Parses an EverQuest combat log line for damage the player is directly involved in and, if found,
@@ -168,9 +220,9 @@ void OtlpExporter::worker_loop() {
 std::string OtlpExporter::build_logs_payload(const std::vector<LogRecord> &records) const {
   nlohmann::json log_records = nlohmann::json::array();
   for (const auto &r : records) {
+    // Character identity now lives on the Resource; keep only per-line context here.
     nlohmann::json attributes = nlohmann::json::array();
     attributes.push_back(int_attr("eq.chat.color", r.color_index));
-    if (!r.character.empty()) attributes.push_back(string_attr("eq.character.name", r.character));
     if (r.zone_id >= 0) attributes.push_back(int_attr("eq.zone.id", r.zone_id));
 
     log_records.push_back({{"timeUnixNano", std::to_string(r.time_unix_nano)},
@@ -182,10 +234,7 @@ std::string OtlpExporter::build_logs_payload(const std::vector<LogRecord> &recor
 
   nlohmann::json payload = {
       {"resourceLogs",
-       {{{"resource",
-          {{"attributes",
-            {string_attr("service.name", "everquest"), string_attr("service.version", ZEAL_VERSION),
-             string_attr("telemetry.sdk.name", "zeal")}}}},
+       {{{"resource", {{"attributes", build_resource_attributes()}}},
          {"scopeLogs",
           {{{"scope", {{"name", "zeal"}, {"version", ZEAL_VERSION}}}, {"logRecords", log_records}}}}}}}};
   // EQ log lines can contain stray non-printable bytes; replace invalid UTF-8 rather than letting
@@ -198,10 +247,23 @@ void OtlpExporter::record_combat_damage(const std::string &direction, const std:
   combat_damage[{direction, type}] += amount;
 }
 
+// Builds a single-value gauge metric (no attributes) as an OTLP metric object.
+static nlohmann::json gauge_metric(const char *name, const char *unit, const std::string &now, long long value) {
+  nlohmann::json point = {{"timeUnixNano", now}, {"asInt", std::to_string(value)}};
+  nlohmann::json metric;
+  metric["name"] = name;
+  metric["unit"] = unit;
+  metric["gauge"] = {{"dataPoints", nlohmann::json::array({point})}};
+  return metric;
+}
+
 std::string OtlpExporter::build_metrics_payload() {
-  nlohmann::json data_points = nlohmann::json::array();
   const std::string now = std::to_string(now_unix_nano());
   const std::string start = std::to_string(start_time_unix_nano);
+  nlohmann::json metrics = nlohmann::json::array();
+
+  // Combat damage counter (cumulative monotonic Sum).
+  nlohmann::json data_points = nlohmann::json::array();
   {
     std::lock_guard<std::mutex> lock(metrics_mutex);
     for (const auto &[key, total] : combat_damage) {
@@ -213,22 +275,40 @@ std::string OtlpExporter::build_metrics_payload() {
                              {"asInt", std::to_string(total)}});
     }
   }
-  if (data_points.empty()) return "";
+  if (!data_points.empty()) {
+    nlohmann::json metric;
+    metric["name"] = "eq.combat.damage";
+    metric["unit"] = "{hitpoint}";
+    metric["sum"] = {{"dataPoints", data_points}, {"aggregationTemporality", 2}, {"isMonotonic", true}};
+    metrics.push_back(metric);
+  }
 
-  nlohmann::json metric;
-  metric["name"] = "eq.combat.damage";
-  metric["unit"] = "{hitpoint}";
-  metric["sum"] = {{"dataPoints", data_points}, {"aggregationTemporality", 2}, {"isMonotonic", true}};
+  // Attack (offense) and haste gauges for DPS correlation, sampled at flush time.
+  if (Zeal::Game::is_in_game() && Zeal::Game::get_char_info()) {
+    ZealService *zeal = ZealService::get_instance();
+    std::string offense;
+    if (zeal->labels_hook && zeal->labels_hook->GetLabel(23, offense))  // 23 = CurrentOffense (attack rating).
+      metrics.push_back(gauge_metric("eq.character.attack", "1", now, atoll(offense.c_str())));
+
+    Zeal::GameStructures::Entity *self = Zeal::Game::get_self();
+    if (self) {
+      // ModifyAttackSpeed applies total effective haste (worn + spell + overhaste) to a reference
+      // delay; derive the haste percentage from the ratio.
+      unsigned int modified = self->ModifyAttackSpeed(1000, 0);
+      long long haste = (modified > 0) ? static_cast<long long>((1000.0 - modified) * 100.0 / modified + 0.5) : 0;
+      if (haste < 0) haste = 0;
+      metrics.push_back(gauge_metric("eq.character.haste", "%", now, haste));
+    }
+  }
+
+  if (metrics.empty()) return "";
 
   nlohmann::json scope_metrics;
   scope_metrics["scope"] = {{"name", "zeal"}, {"version", ZEAL_VERSION}};
-  scope_metrics["metrics"] = nlohmann::json::array({metric});
+  scope_metrics["metrics"] = metrics;
 
   nlohmann::json resource_metrics;
-  resource_metrics["resource"] = {{"attributes",
-                                   {string_attr("service.name", "everquest"),
-                                    string_attr("service.version", ZEAL_VERSION),
-                                    string_attr("telemetry.sdk.name", "zeal")}}};
+  resource_metrics["resource"] = {{"attributes", build_resource_attributes()}};
   resource_metrics["scopeMetrics"] = nlohmann::json::array({scope_metrics});
 
   nlohmann::json payload;
