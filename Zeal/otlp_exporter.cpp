@@ -57,13 +57,43 @@ const char *class_name(int class_id) {
 // fills direction ("outgoing"/"incoming"), type (the melee verb or "spell"), and amount. Returns
 // false for lines that aren't self-involved damage (e.g. a group member's hits) so they aren't
 // double counted. EQ renders the local player as "You"/"YOU".
-bool parse_combat_line(const std::string &line, std::string &direction, std::string &type, long long &amount) {
-  size_t dmg = line.find("of damage");
-  if (dmg == std::string::npos) return false;
-  size_t pts = line.rfind("point", dmg);  // matches "point" and "points"
-  if (pts == std::string::npos) return false;
+std::string trim(const std::string &s) {
+  size_t a = s.find_first_not_of(' ');
+  size_t b = s.find_last_not_of(' ');
+  return (a == std::string::npos) ? "" : s.substr(a, b - a + 1);
+}
 
-  size_t end = pts;
+// Combat verbs as they appear in EQ messages, mapped to a canonical damage type. Both the 1st-person
+// ("You slash") and 3rd-person ("Abuelo slashes") forms are listed so any attacker is recognized.
+struct CombatVerb {
+  const char *word;
+  const char *canon;
+};
+const CombatVerb kCombatVerbs[] = {
+    {"slashes", "slash"},       {"slash", "slash"},   {"crushes", "crush"},   {"crush", "crush"},
+    {"pierces", "pierce"},      {"pierce", "pierce"}, {"bashes", "bash"},     {"bash", "bash"},
+    {"kicks", "kick"},          {"kick", "kick"},     {"bites", "bite"},      {"bite", "bite"},
+    {"claws", "claw"},          {"claw", "claw"},     {"gores", "gore"},      {"gore", "gore"},
+    {"mauls", "maul"},          {"maul", "maul"},     {"punches", "punch"},   {"punch", "punch"},
+    {"backstabs", "backstab"},  {"backstab", "backstab"}, {"strikes", "strike"}, {"strike", "strike"},
+    {"smashes", "smash"},       {"smash", "smash"},   {"stings", "sting"},    {"sting", "sting"},
+    {"slices", "slice"},        {"slice", "slice"},   {"rends", "rend"},      {"rend", "rend"},
+    {"slams", "slam"},          {"slam", "slam"},     {"hits", "hit"},        {"hit", "hit"},
+};
+
+// Parses "<Source> <verb> <Target> for <N> points of [non-melee ]damage." from any attacker.
+// Fills source (attacker; "You" is normalized by the caller to the local character), direction
+// (incoming if the local player is the target, else outgoing), type (canonical verb or "non-melee"),
+// and amount. Returns false for lines that aren't attributable combat damage.
+bool parse_combat_line(const std::string &line, std::string &source, std::string &direction, std::string &type,
+                       long long &amount) {
+  size_t of = line.find(" points of ");
+  if (of == std::string::npos) of = line.find(" point of ");
+  if (of == std::string::npos || line.find("damage", of) == std::string::npos) return false;
+  const bool non_melee = line.find("non-melee", of) != std::string::npos;
+
+  // Amount: the integer immediately before " point(s) of".
+  size_t end = of;
   while (end > 0 && line[end - 1] == ' ') end--;
   size_t start = end;
   while (start > 0 && isdigit(static_cast<unsigned char>(line[start - 1]))) start--;
@@ -71,21 +101,34 @@ bool parse_combat_line(const std::string &line, std::string &direction, std::str
   amount = atoll(line.substr(start, end - start).c_str());
   if (amount <= 0) return false;
 
-  if (line.rfind("You have taken ", 0) == 0) {
-    direction = "incoming";
-    type = "spell";  // "You have taken N points of damage from ..."
-  } else if (line.rfind("You ", 0) == 0) {
-    direction = "outgoing";
-    size_t vstart = 4;
-    size_t vend = line.find(' ', vstart);
-    type = (vend == std::string::npos) ? "melee" : line.substr(vstart, vend - vstart);
-  } else if (line.find(" YOU ") != std::string::npos) {
-    direction = "incoming";
-    type = "melee";
-  } else {
-    return false;  // Not self-involved; skip.
+  size_t forpos = line.rfind(" for ", start);
+  if (forpos == std::string::npos) return false;
+
+  // Find the leftmost combat verb before " for " — it splits source | target.
+  size_t verb_start = std::string::npos, verb_end = std::string::npos;
+  for (const auto &v : kCombatVerbs) {
+    std::string pat = std::string(" ") + v.word + " ";
+    size_t p = line.find(pat);
+    if (p != std::string::npos && p < forpos && (verb_start == std::string::npos || p < verb_start)) {
+      verb_start = p;
+      verb_end = p + pat.size();
+      type = v.canon;
+    }
   }
-  for (auto &c : type) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+  if (verb_start == std::string::npos) return false;
+
+  source = trim(line.substr(0, verb_start));
+  std::string target = trim(line.substr(verb_end, forpos - verb_end));
+  if (source.empty()) return false;
+  if (non_melee) type = "non-melee";
+
+  const bool target_is_you = (target == "YOU" || target == "you");
+  if (source == "You") {
+    direction = "outgoing";
+    if (Zeal::Game::get_self()) source = Zeal::Game::get_self()->Name;  // attribute to the local char
+  } else {
+    direction = target_is_you ? "incoming" : "outgoing";
+  }
   return true;
 }
 }  // namespace
@@ -100,9 +143,10 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
   zeal->chat_hook->add_print_chat_callback([this](const char *data, int color_index) {
     if (!is_enabled() || !data) return;
     log(data, color_index);
-    std::string direction, type;
+    std::string source, direction, type;
     long long amount = 0;
-    if (parse_combat_line(data, direction, type, amount)) record_combat_damage(direction, type, amount);
+    if (parse_combat_line(data, source, direction, type, amount) && in_combat_scope(source))
+      record_combat_damage(source, direction, type, amount);
   });
 
   // Sample live game state on the game thread (MainLoop); the sender thread only ever serializes the
@@ -138,13 +182,25 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                                Zeal::Game::print_chat("OTLP flush interval set to %ims", ms);
                                return true;
                              }
-                             Zeal::Game::print_chat("OTLP: %s, endpoint %s, flush %ims",
+                             if (args.size() == 3 && Zeal::String::compare_insensitive(args[1], "scope")) {
+                               if (Zeal::String::compare_insensitive(args[2], "self") ||
+                                   Zeal::String::compare_insensitive(args[2], "all")) {
+                                 setting_combat_scope.set(Zeal::String::compare_insensitive(args[2], "all") ? "all"
+                                                                                                           : "self");
+                                 Zeal::Game::print_chat("OTLP combat scope: %s", setting_combat_scope.get().c_str());
+                               } else {
+                                 Zeal::Game::print_chat("Usage: /otlp scope self|all  (self=you+pet, all=everyone)");
+                               }
+                               return true;
+                             }
+                             Zeal::Game::print_chat("OTLP: %s, endpoint %s, flush %ims, scope %s",
                                                     setting_enabled.get() ? "enabled" : "disabled",
-                                                    setting_endpoint.get().c_str(), setting_flush_ms.get());
+                                                    setting_endpoint.get().c_str(), setting_flush_ms.get(),
+                                                    setting_combat_scope.get().c_str());
                              Zeal::Game::print_chat("  sent: %llu log batches-worth, %llu metric posts, %llu failed",
                                                     logs_posted.load(), metrics_posted.load(), failed_posts.load());
                              Zeal::Game::print_chat("  last HTTP status: %i", last_http_status.load());
-                             Zeal::Game::print_chat("Usage: /otlp on|off|status|endpoint <url>|flush <ms>");
+                             Zeal::Game::print_chat("Usage: /otlp on|off|status|endpoint <url>|flush <ms>|scope self|all");
                              return true;
                            });
 }
@@ -316,9 +372,22 @@ std::string OtlpExporter::build_logs_payload(const std::vector<LogRecord> &recor
   return payload.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
-void OtlpExporter::record_combat_damage(const std::string &direction, const std::string &type, long long amount) {
+bool OtlpExporter::in_combat_scope(const std::string &source) const {
+  if (setting_combat_scope.get() != "self") return true;  // "all" (or anything non-"self") records everyone.
+  // Self scope: only the local character and its pet (runs on the game thread via the chat callback).
+  Zeal::GameStructures::GAMECHARINFO *ci = Zeal::Game::get_char_info();
+  if (ci && source == ci->Name) return true;
+  std::string pet;
+  if (ZealService::get_instance()->labels_hook &&
+      ZealService::get_instance()->labels_hook->GetLabel(68, pet) && !pet.empty() && source == pet)
+    return true;  // 68 = PlayerPetName
+  return false;
+}
+
+void OtlpExporter::record_combat_damage(const std::string &source, const std::string &direction,
+                                        const std::string &type, long long amount) {
   std::lock_guard<std::mutex> lock(metrics_mutex);
-  combat_damage[{direction, type}] += amount;
+  combat_damage[{source, direction, type}] += amount;
 }
 
 // Builds a single-value gauge metric (no attributes) as an OTLP metric object.
@@ -342,8 +411,9 @@ std::string OtlpExporter::build_metrics_payload() {
     std::lock_guard<std::mutex> lock(metrics_mutex);
     for (const auto &[key, total] : combat_damage) {
       data_points.push_back({{"attributes",
-                              {string_attr("eq.combat.direction", key.first),
-                               string_attr("eq.combat.damage.type", key.second)}},
+                              {string_attr("eq.combat.source", std::get<0>(key)),
+                               string_attr("eq.combat.direction", std::get<1>(key)),
+                               string_attr("eq.combat.damage.type", std::get<2>(key))}},
                              {"startTimeUnixNano", start},
                              {"timeUnixNano", now},
                              {"asInt", std::to_string(total)}});

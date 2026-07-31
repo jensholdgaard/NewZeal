@@ -8,6 +8,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -65,8 +66,11 @@ class OtlpExporter {
   std::string build_logs_payload(const std::vector<LogRecord> &records) const;
   nlohmann::json build_resource_attributes() const;
 
-  // Accumulates the `eq.combat.damage` counter, keyed by {direction, damage_type}.
-  void record_combat_damage(const std::string &direction, const std::string &type, long long amount);
+  // Accumulates the `eq.combat.damage` counter, keyed by {source, direction, damage_type}.
+  void record_combat_damage(const std::string &source, const std::string &direction, const std::string &type,
+                            long long amount);
+  // True if `source` should be recorded given the current scope setting (self+pet vs all attackers).
+  bool in_combat_scope(const std::string &source) const;
   // Serializes the current cumulative counter snapshot as an OTLP metrics payload ("" if empty).
   std::string build_metrics_payload();
 
@@ -84,7 +88,12 @@ class OtlpExporter {
   // Fixed start time for cumulative metric streams (set at construction).
   unsigned long long start_time_unix_nano = 0;
   std::mutex metrics_mutex;
-  std::map<std::pair<std::string, std::string>, long long> combat_damage;  // {direction, type} -> total
+  // {source, direction, type} -> total hitpoints.
+  std::map<std::tuple<std::string, std::string, std::string>, long long> combat_damage;
+
+  // "self" = record only the local character + its pet (authoritative per-player, no double counting
+  // when the whole guild reports). "all" = record every attacker seen in the log (solo experiment).
+  ZealSetting<std::string> setting_combat_scope = {"self", "Zeal", "OtlpCombatScope", false};
 
   // Lightweight send stats surfaced by `/otlp status`.
   std::atomic<unsigned long long> logs_posted{0};
