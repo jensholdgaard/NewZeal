@@ -9,6 +9,7 @@
 #include "callbacks.h"
 #include "chat.h"
 #include "commands.h"
+#include "entity_manager.h"
 #include "game_functions.h"
 #include "game_structures.h"
 #include "json.hpp"
@@ -120,6 +121,8 @@ bool parse_combat_line(const std::string &line, std::string &source, std::string
   source = trim(line.substr(0, verb_start));
   std::string target = trim(line.substr(verb_end, forpos - verb_end));
   if (source.empty()) return false;
+  // Passive voice ("<target> was hit by non-melee for N ...") names no attacker — not attributable.
+  if (source.size() >= 4 && source.compare(source.size() - 4, 4, " was") == 0) return false;
   if (non_melee) type = "non-melee";
 
   const bool target_is_you = (target == "YOU" || target == "you");
@@ -145,8 +148,10 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
     log(data, color_index);
     std::string source, direction, type;
     long long amount = 0;
-    if (parse_combat_line(data, source, direction, type, amount) && in_combat_scope(source))
-      record_combat_damage(source, direction, type, amount);
+    if (parse_combat_line(data, source, direction, type, amount)) {
+      std::string source_type = classify_source(source);  // may rewrite source (pet -> owner)
+      if (in_combat_scope(source)) record_combat_damage(source, source_type, direction, type, amount);
+    }
   });
 
   // Sample live game state on the game thread (MainLoop); the sender thread only ever serializes the
@@ -372,6 +377,22 @@ std::string OtlpExporter::build_logs_payload(const std::vector<LogRecord> &recor
   return payload.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
+std::string OtlpExporter::classify_source(std::string &source) const {
+  EntityManager *em = ZealService::get_instance()->entity_manager.get();
+  if (!em) return "unknown";
+  Zeal::GameStructures::Entity *e = em->Get(source);
+  if (!e) return "unknown";  // e.g. NPC whose display name doesn't match the spawn list — filtered out.
+  // Roll a pet's damage into its owner (what DPS meters show), using the live pet->owner link.
+  if (e->PetOwnerSpawnId != 0) {
+    Zeal::GameStructures::Entity *owner = em->Get(e->PetOwnerSpawnId);
+    if (owner) {
+      source = owner->Name;
+      e = owner;
+    }
+  }
+  return (e->Type == Zeal::GameEnums::EntityTypes::Player) ? "player" : "npc";
+}
+
 bool OtlpExporter::in_combat_scope(const std::string &source) const {
   if (setting_combat_scope.get() != "self") return true;  // "all" (or anything non-"self") records everyone.
   // Self scope: only the local character and its pet (runs on the game thread via the chat callback).
@@ -384,10 +405,10 @@ bool OtlpExporter::in_combat_scope(const std::string &source) const {
   return false;
 }
 
-void OtlpExporter::record_combat_damage(const std::string &source, const std::string &direction,
-                                        const std::string &type, long long amount) {
+void OtlpExporter::record_combat_damage(const std::string &source, const std::string &source_type,
+                                        const std::string &direction, const std::string &type, long long amount) {
   std::lock_guard<std::mutex> lock(metrics_mutex);
-  combat_damage[{source, direction, type}] += amount;
+  combat_damage[{source, source_type, direction, type}] += amount;
 }
 
 // Builds a single-value gauge metric (no attributes) as an OTLP metric object.
@@ -412,8 +433,9 @@ std::string OtlpExporter::build_metrics_payload() {
     for (const auto &[key, total] : combat_damage) {
       data_points.push_back({{"attributes",
                               {string_attr("eq.combat.source", std::get<0>(key)),
-                               string_attr("eq.combat.direction", std::get<1>(key)),
-                               string_attr("eq.combat.damage.type", std::get<2>(key))}},
+                               string_attr("eq.combat.source_type", std::get<1>(key)),
+                               string_attr("eq.combat.direction", std::get<2>(key)),
+                               string_attr("eq.combat.damage.type", std::get<3>(key))}},
                              {"startTimeUnixNano", start},
                              {"timeUnixNano", now},
                              {"asInt", std::to_string(total)}});
