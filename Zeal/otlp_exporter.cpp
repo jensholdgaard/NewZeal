@@ -100,9 +100,14 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
   // source (the pipe uses the same callback); registering our own keeps OTLP independent of whether
   // the pipe has a reader connected.
   zeal->chat_hook->add_print_chat_callback([this](const char *data, int color_index) {
-    if (is_enabled() && data) log(data, color_index);
+    if (!is_enabled() || !data) return;
+    log(data, color_index);
+    // DoT ticks and heal amounts never fire the hit event and are only messaged to the involved
+    // client, so text is the correct (and self-reporting, non-duplicating) channel for them.
+    parse_dot_or_heal(data);
   });
 
+  // (see parse_dot_or_heal below for DoT/heal text handling)
   // Combat damage from the actual hit event (spawn IDs resolved to entities) — far more reliable than
   // parsing chat text: exact attacker/target, damage, and skill/spell, incl. charmed pets.
   zeal->callbacks->AddReportSuccessfulHit([this](Zeal::GameStructures::Entity *source,
@@ -362,6 +367,64 @@ void OtlpExporter::record_combat_damage(const std::string &source, const std::st
   combat_damage[{source, source_type, direction, type}] += amount;
 }
 
+void OtlpExporter::record_heal(const std::string &source, const std::string &direction, long long amount) {
+  std::lock_guard<std::mutex> lock(metrics_mutex);
+  combat_heal[{source, direction}] += amount;
+}
+
+// Extracts the positive integer that starts at line[pos] (returns 0 if none).
+static long long read_number(const std::string &line, size_t pos) {
+  size_t end = pos;
+  while (end < line.size() && isdigit(static_cast<unsigned char>(line[end]))) end++;
+  return (end > pos) ? atoll(line.substr(pos, end - pos).c_str()) : 0;
+}
+
+void OtlpExporter::parse_dot_or_heal(const std::string &line) {
+  const char *self = Zeal::Game::get_self() ? Zeal::Game::get_self()->Name : nullptr;
+  if (!self) return;
+
+  // DoT tick (caster-side): "<target> has taken <N> damage from your <spell>."
+  // Observer form:          "<target> has taken <N> damage from <caster>'s <spell>."
+  size_t p = line.find(" has taken ");
+  if (p != std::string::npos) {
+    long long amount = read_number(line, p + 11);
+    size_t from = line.find(" damage from ", p);
+    if (amount > 0 && from != std::string::npos) {
+      std::string rest = line.substr(from + 13);
+      if (rest.rfind("your ", 0) == 0) {
+        record_combat_damage(self, "player", "outgoing", "dot", amount);
+      } else {
+        size_t apos = rest.find("'s ");  // "<caster>'s <spell>"
+        if (apos != std::string::npos && setting_combat_scope.get() != "self") {
+          std::string caster = rest.substr(0, apos);
+          auto *e = ZealService::get_instance()->entity_manager->Get(caster);
+          const char *ct = (e && e->Type == Zeal::GameEnums::EntityTypes::Player) ? "player" : "npc";
+          record_combat_damage(caster, ct, "outgoing", "dot", amount);
+        }
+      }
+    }
+    return;
+  }
+
+  // Heal done (caster-side): "You have healed <target> for <N> points."
+  p = line.find("You have healed ");
+  if (p == 0) {
+    size_t f = line.find(" for ", 16);
+    if (f != std::string::npos) {
+      long long amount = read_number(line, f + 5);
+      if (amount > 0) record_heal(self, "outgoing", amount);
+    }
+    return;
+  }
+
+  // Heal received (target-side): "You have been healed for <N> points."
+  p = line.find("You have been healed for ");
+  if (p == 0) {
+    long long amount = read_number(line, 25);
+    if (amount > 0) record_heal(self, "incoming", amount);
+  }
+}
+
 // Builds a single-value gauge metric (no attributes) as an OTLP metric object.
 static nlohmann::json gauge_metric(const char *name, const char *unit, const std::string &now, long long value) {
   nlohmann::json point = {{"timeUnixNano", now}, {"asInt", std::to_string(value)}};
@@ -397,6 +460,27 @@ std::string OtlpExporter::build_metrics_payload() {
     metric["name"] = "eq.combat.damage";
     metric["unit"] = "{hitpoint}";
     metric["sum"] = {{"dataPoints", data_points}, {"aggregationTemporality", 2}, {"isMonotonic", true}};
+    metrics.push_back(metric);
+  }
+
+  // Healing counter (cumulative monotonic Sum), keyed by {source, direction}.
+  nlohmann::json heal_points = nlohmann::json::array();
+  {
+    std::lock_guard<std::mutex> lock(metrics_mutex);
+    for (const auto &[key, total] : combat_heal) {
+      heal_points.push_back({{"attributes",
+                              {string_attr("eq.combat.source", key.first),
+                               string_attr("eq.combat.direction", key.second)}},
+                             {"startTimeUnixNano", start},
+                             {"timeUnixNano", now},
+                             {"asInt", std::to_string(total)}});
+    }
+  }
+  if (!heal_points.empty()) {
+    nlohmann::json metric;
+    metric["name"] = "eq.combat.heal";
+    metric["unit"] = "{hitpoint}";
+    metric["sum"] = {{"dataPoints", heal_points}, {"aggregationTemporality", 2}, {"isMonotonic", true}};
     metrics.push_back(metric);
   }
 

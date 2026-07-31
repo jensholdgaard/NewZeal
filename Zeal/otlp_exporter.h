@@ -69,6 +69,10 @@ class OtlpExporter {
   // Accumulates the `eq.combat.damage` counter, keyed by {source, source_type, direction, damage_type}.
   void record_combat_damage(const std::string &source, const std::string &source_type, const std::string &direction,
                             const std::string &type, long long amount);
+  // Parses caster-side DoT ticks and heal messages from a chat line (they have no hit event).
+  void parse_dot_or_heal(const std::string &line);
+  // Accumulates the `eq.combat.heal` counter, keyed by {source, direction}.
+  void record_heal(const std::string &source, const std::string &direction, long long amount);
   // True if `source` should be recorded given the current scope setting (self+pet vs all attackers).
   bool in_combat_scope(const std::string &source) const;
   // Serializes the current cumulative counter snapshot as an OTLP metrics payload ("" if empty).
@@ -90,6 +94,8 @@ class OtlpExporter {
   std::mutex metrics_mutex;
   // {source, source_type, direction, type} -> total hitpoints.
   std::map<std::tuple<std::string, std::string, std::string, std::string>, long long> combat_damage;
+  // {source, direction(outgoing=healing done, incoming=healing received)} -> total hitpoints.
+  std::map<std::pair<std::string, std::string>, long long> combat_heal;
 
   // "self" = record only the local character + its pet (authoritative per-player, no double counting
   // when the whole guild reports). "all" = record every attacker seen in the log (solo experiment).
