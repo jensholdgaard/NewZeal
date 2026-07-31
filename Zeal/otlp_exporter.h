@@ -67,9 +67,11 @@ class OtlpExporter {
   std::string build_logs_payload(const std::vector<LogRecord> &records) const;
   nlohmann::json build_resource_attributes() const;
 
-  // Accumulates the `eq.combat.damage` counter, keyed by {source, source_type, direction, damage_type, zone}.
+  // Accumulates the `eq.combat.damage` counter, keyed by
+  // {source, source_type, direction, damage_type, zone, target}. `target` is the raw spawn name
+  // (instance digits included, e.g. "a_temple_guard00") so individual mobs are distinguishable.
   void record_combat_damage(const std::string &source, const std::string &source_type, const std::string &direction,
-                            const std::string &type, long long amount);
+                            const std::string &type, const std::string &target, long long amount);
   // Parses caster-side DoT ticks and heal messages from a chat line (they have no hit event).
   void parse_dot_or_heal(const std::string &line);
   // Accumulates the `eq.combat.heal` counter, keyed by {source, direction, zone}.
@@ -92,9 +94,17 @@ class OtlpExporter {
 
   // Fixed start time for cumulative metric streams (set at construction).
   unsigned long long start_time_unix_nano = 0;
+  static constexpr unsigned long long kSeriesIdleMs = 10 * 60 * 1000;  // stop exporting fights idle >10min
+
+  struct CombatTotal {
+    long long total = 0;
+    unsigned long long last_ms = 0;  // GetTickCount64 of last hit; prunes stale per-target series
+  };
+
   std::mutex metrics_mutex;
-  // {source, source_type, direction, type, zone} -> total hitpoints.
-  std::map<std::tuple<std::string, std::string, std::string, std::string, std::string>, long long> combat_damage;
+  // {source, source_type, direction, type, zone, target} -> running total.
+  std::map<std::tuple<std::string, std::string, std::string, std::string, std::string, std::string>, CombatTotal>
+      combat_damage;
   // {source, direction(outgoing=done, incoming=received), zone} -> total hitpoints.
   std::map<std::tuple<std::string, std::string, std::string>, long long> combat_heal;
 
