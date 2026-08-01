@@ -43,26 +43,10 @@ jobs:
         shell: pwsh
         run: |
           $inst = "$env:VCPKG_INSTALLATION_ROOT\installed\$env:TRIPLET"
-          # Link every static lib vcpkg produced — simplest correct answer for a deep dep tree
-          # (protobuf, abseil, curl, zlib, the otel exporters...). The linker drops what's unused.
           $libs = (Get-ChildItem "$inst\lib\*.lib" | ForEach-Object { $_.Name }) -join ';'
-          $props = @"
-<?xml version="1.0" encoding="utf-8"?>
-<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <ItemDefinitionGroup>
-    <ClCompile>
-      <AdditionalIncludeDirectories>$inst\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>ZEAL_OTLP_SDK;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-    </ClCompile>
-    <Link>
-      <AdditionalLibraryDirectories>$inst\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>$libs;ws2_32.lib;crypt32.lib;wldap32.lib;normaliz.lib;bcrypt.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
-    </Link>
-  </ItemDefinitionGroup>
-</Project>
-"@
-          Set-Content -Path "$env:GITHUB_WORKSPACE\otel-sdk.props" -Value $props -Encoding UTF8
-          Write-Host "linking $((($libs -split ';').Count)) static libs"
+          Write-Host "linking $((($libs -split ';').Count)) static libs from $inst"
+          (Get-Content ci/otel-sdk.props.in -Raw).Replace('@VCPKG@', $inst).Replace('@LIBS@', $libs) |
+            Set-Content -Path otel-sdk.props -Encoding UTF8
 
       - name: Build Zeal (SDK exporter)
         shell: pwsh
