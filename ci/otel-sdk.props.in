@@ -10,6 +10,12 @@
     <Link>
       <AdditionalLibraryDirectories>@VCPKG@\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>@LIBS@;ws2_32.lib;crypt32.lib;wldap32.lib;normaliz.lib;bcrypt.lib;advapi32.lib;secur32.lib;iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- HACK (test artifact only): vcpkg's zlib collides with the zlib baked into the 2003-era
+           d3dx8.lib. FORCE:MULTIPLE lets the link finish so the build can be smoke-tested under
+           Wine; it is NOT a shippable resolution (curl may end up calling the ancient zlib). The
+           clean fix is building curl without the zlib feature. -->
+      <AdditionalOptions>/FORCE:MULTIPLE %(AdditionalOptions)</AdditionalOptions>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
     </Link>
   </ItemDefinitionGroup>
 </Project>
