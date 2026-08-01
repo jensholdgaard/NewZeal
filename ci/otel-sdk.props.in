@@ -9,7 +9,7 @@
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>@VCPKG@\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>@LIBS@;ws2_32.lib;crypt32.lib;wldap32.lib;normaliz.lib;bcrypt.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>@LIBS@;ws2_32.lib;crypt32.lib;wldap32.lib;normaliz.lib;bcrypt.lib;advapi32.lib;secur32.lib;iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
 </Project>
