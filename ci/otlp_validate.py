@@ -33,6 +33,37 @@ def signal_for(path: str):
     return None, None
 
 
+def semantic_checks(name, path, raw):
+    """Invariants the protobuf schema accepts but real backends reject."""
+    import json
+    problems = []
+    d = json.loads(raw)
+    if name == "traces":
+        for rs in d.get("resourceSpans", []):
+            for ss in rs.get("scopeSpans", []):
+                for sp in ss.get("spans", []):
+                    tid, sid = sp.get("traceId", ""), sp.get("spanId", "")
+                    if len(tid) != 32 or set(tid) == {"0"}:
+                        problems.append(f"span {sp.get('name')!r}: traceId must be 32 non-zero hex chars, got {len(tid)}")
+                    if len(sid) != 16 or set(sid) == {"0"}:
+                        problems.append(f"span {sp.get('name')!r}: spanId must be 16 non-zero hex chars, got {len(sid)}")
+                    psid = sp.get("parentSpanId", "")
+                    if psid and len(psid) != 16:
+                        problems.append(f"span {sp.get('name')!r}: parentSpanId must be 16 hex chars, got {len(psid)}")
+                    if int(sp.get("endTimeUnixNano", 0)) < int(sp.get("startTimeUnixNano", 0)):
+                        problems.append(f"span {sp.get('name')!r}: endTime precedes startTime")
+    if name == "metrics":
+        for rm in d.get("resourceMetrics", []):
+            for sm in rm.get("scopeMetrics", []):
+                for m in sm.get("metrics", []):
+                    if "sum" in m and m["sum"].get("aggregationTemporality") not in (1, 2):
+                        problems.append(f"metric {m.get('name')!r}: sum needs aggregationTemporality 1 or 2")
+                    for dp in m.get("sum", {}).get("dataPoints", []):
+                        if "startTimeUnixNano" not in dp:
+                            problems.append(f"metric {m.get('name')!r}: cumulative sum needs startTimeUnixNano")
+    return problems
+
+
 def main(paths):
     files = [f for p in paths for f in (glob.glob(p) or [p])]
     if not files:
@@ -45,8 +76,16 @@ def main(paths):
             print(f"SKIP  {path} (name must contain metrics/logs/traces)")
             continue
         try:
-            json_format.Parse(open(path).read(), msg())
-            print(f"OK    {path} ({name})")
+            raw = open(path).read()
+            json_format.Parse(raw, msg())
+            issues = semantic_checks(name, path, raw)
+            if issues:
+                failures += 1
+                print(f"FAIL  {path} ({name}) — schema ok, but:")
+                for i in issues:
+                    print(f"      {i}")
+            else:
+                print(f"OK    {path} ({name})")
         except Exception as exc:  # noqa: BLE001 - report any schema violation verbatim
             failures += 1
             print(f"FAIL  {path} ({name})\n      {str(exc).splitlines()[0]}")
