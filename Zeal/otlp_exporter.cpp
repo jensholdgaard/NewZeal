@@ -124,6 +124,22 @@ const char *melee_type_name(unsigned short skill) {
   }
 }
 
+// Damage shield hits arrive as ordinary damage packets, but the server puts a DmgShieldType into the
+// field where a SkillType would normally go, so they cannot be classified with melee_type_name:
+//
+//   Mob::DamageShield()                    (EQMacEmu zone/attack.cpp, which Quarm derives from)
+//     cds->type    = spellbonuses.DamageShieldType;   // DS_DECAY(244) .. DS_THORNS(249)
+//     cds->spellid = spellid;                         // the DS spell, or SPELL_UNKNOWN
+//
+// Without this test, DS damage silently lands in "spell" (a buff DS carries a spell id) or in
+// "melee" (item and innate DS send SPELL_UNKNOWN, and 244..249 falls through to the default skill
+// case) - counted in the totals either way, but impossible to separate out.
+bool is_damage_shield_type(unsigned short type) {
+  constexpr unsigned short kDsDecay = 244;
+  constexpr unsigned short kDsThorns = 249;
+  return type >= kDsDecay && type <= kDsThorns;
+}
+
 }  // namespace
 
 OtlpExporter::OtlpExporter(ZealService *zeal) {
@@ -157,7 +173,11 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
     std::string src = attacker->Name;
     const char *src_type = (attacker->Type == Zeal::GameEnums::EntityTypes::Player) ? "player" : "npc";
     const char *direction = (target && target == Zeal::Game::get_self()) ? "incoming" : "outgoing";
-    const char *dtype = (spell_id > 0) ? "spell" : melee_type_name(type);
+    // Tested before spell_id: a buff-granted damage shield carries one, and would otherwise be
+    // indistinguishable from a nuke.
+    const char *dtype = is_damage_shield_type(type) ? "damage_shield"
+                        : (spell_id > 0)            ? "spell"
+                                                    : melee_type_name(type);
     const std::string tgt = target ? target->Name : "";  // raw spawn name, e.g. "a_temple_guard00"
     if (in_combat_scope(src)) record_combat_damage(src, src_type, direction, dtype, tgt, damage);
     // Fight spans: track encounters with NPCs (the mob is the target when we hit it, the source
