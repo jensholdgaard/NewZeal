@@ -344,13 +344,13 @@ void OtlpExporter::sample_game_state() {
 static void attack_callback(metrics_api::ObserverResult result, void *state) {
   auto *self = static_cast<OtlpExporter *>(state);
   if (!self || !self->is_enabled()) return;
-  self->observe_attack(result);
+  self->observe_attack(&result);
 }
 
 static void haste_callback(metrics_api::ObserverResult result, void *state) {
   auto *self = static_cast<OtlpExporter *>(state);
   if (!self || !self->is_enabled()) return;
-  self->observe_haste(result);
+  self->observe_haste(&result);
 }
 
 void OtlpExporter::observe_attack(void *result_ptr) {
