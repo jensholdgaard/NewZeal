@@ -12,6 +12,13 @@
 
 #include "otlp_exporter.h"
 
+// Zeal relies on the Windows min/max macros elsewhere, but they break the otel/protobuf headers
+// (std::min/std::max, numeric_limits::max()). Suppress them for these includes only, then restore.
+#pragma push_macro("min")
+#pragma push_macro("max")
+#undef min
+#undef max
+
 #include "opentelemetry/exporters/otlp/otlp_http_exporter_factory.h"
 #include "opentelemetry/exporters/otlp/otlp_http_exporter_options.h"
 #include "opentelemetry/exporters/otlp/otlp_http_log_record_exporter_factory.h"
@@ -26,6 +33,9 @@
 #include "opentelemetry/sdk/metrics/meter_provider_factory.h"
 #include "opentelemetry/sdk/metrics/view/view_registry_factory.h"
 #include "opentelemetry/sdk/resource/resource.h"
+
+#pragma pop_macro("max")
+#pragma pop_macro("min")
 
 #include "callbacks.h"
 #include "chat.h"
