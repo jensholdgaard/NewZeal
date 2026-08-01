@@ -541,9 +541,19 @@ void OtlpExporter::parse_dot_or_heal(const std::string &line) {
   // cannot be claimed unless it landed immediately before the shield fired.
   const std::string ds_target = damage_shield_target(line);
   if (!ds_target.empty()) {
-    if (!ds_pending_target.empty() && ds_pending_target == ds_target &&
-        GetTickCount64() - ds_pending_ms < 1000) {
+    const bool claimed = !ds_pending_target.empty() && ds_pending_target == ds_target &&
+                         GetTickCount64() - ds_pending_ms < 1000;
+    if (claimed) {
       record_combat_damage(self, "player", "outgoing", "damage_shield", ds_pending_target, ds_pending_amount);
+    }
+    if (debug_hits.load()) {
+      // Shields take the text path, so without this `/otlp debug` would stay silent for them and a
+      // pairing that never fires would look identical to one that does.
+      if (claimed)
+        Zeal::Game::print_chat("[otlp] damage_shield %s dmg=%lld (paired with the preceding non-melee line)",
+                               ds_target.c_str(), ds_pending_amount);
+      else
+        Zeal::Game::print_chat("[otlp] damage_shield %s UNPAIRED - no non-melee amount to claim", ds_target.c_str());
     }
     ds_pending_target.clear();
     return;
