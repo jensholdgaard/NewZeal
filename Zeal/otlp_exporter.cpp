@@ -7,6 +7,7 @@
 #include <cctype>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <random>
 
 #include "callbacks.h"
@@ -142,9 +143,10 @@ const char *melee_type_name(unsigned short skill) {
 //     cds->type    = spellbonuses.DamageShieldType;   // DS_DECAY(244) .. DS_THORNS(249)
 //     cds->spellid = spellid;                         // the DS spell, or SPELL_UNKNOWN
 //
-// Without this test, DS damage silently lands in "spell" (a buff DS carries a spell id) or in
-// "melee" (item and innate DS send SPELL_UNKNOWN, and 244..249 falls through to the default skill
-// case) - counted in the totals either way, but impossible to separate out.
+// NOTE: on Project Quarm this never fires - verified in game with `/otlp debug`, where shield hits
+// produced chat messages but no hit event at all (see parse_dot_or_heal, which handles them from
+// text). It is kept because it costs nothing and is correct for servers that do deliver a shield as
+// a damage packet, where the alternative is silently filing it under "spell" or "melee".
 bool is_damage_shield_type(unsigned short type) {
   constexpr unsigned short kDsDecay = 244;
   constexpr unsigned short kDsThorns = 249;
@@ -503,9 +505,63 @@ static long long read_number(const std::string &line, size_t pos) {
   return (end > pos) ? atoll(line.substr(pos, end - pos).c_str()) : 0;
 }
 
+// Damage shield damage never reaches the ReportSuccessfulHit hook on this server - verified in game
+// with `/otlp debug`, where every melee swing printed a hit line but the shield produced only chat:
+//
+//   A vampyre bat was hit by non-melee for 30 points of damage.   <- message 434, the amount
+//   A vampyre bat was chilled to the bone.                        <- message 12140, the cause
+//
+// Neither line is sufficient alone: 434 is also emitted for ordinary spell damage and names no
+// attacker, and the flavour line carries no number. They are paired by arriving back to back for the
+// same target, which is what this parser keys on. The six flavour messages (12132..12142) correspond
+// one-to-one with the six DmgShieldType values the server tracks internally.
+namespace {
+const char *const kDamageShieldSuffixes[] = {
+    " was pierced by thorns.", " was burned.", " was tormented.",
+    " was chilled to the bone.", " is burning.", " is freezing!",
+};
+
+// "<target> was chilled to the bone." -> "<target>", or "" if the line is not a shield message.
+std::string damage_shield_target(const std::string &line) {
+  for (const char *suffix : kDamageShieldSuffixes) {
+    const size_t len = strlen(suffix);
+    if (line.size() > len && line.compare(line.size() - len, len, suffix) == 0)
+      return line.substr(0, line.size() - len);
+  }
+  return "";
+}
+}  // namespace
+
 void OtlpExporter::parse_dot_or_heal(const std::string &line) {
   const char *self = Zeal::Game::get_self() ? Zeal::Game::get_self()->Name : nullptr;
   if (!self) return;
+
+  // Damage shield, part 2: a flavour line claims the amount buffered from the line before it. The
+  // pending slot holds only the most recent 434 message, so an unrelated nuke on the same target
+  // cannot be claimed unless it landed immediately before the shield fired.
+  const std::string ds_target = damage_shield_target(line);
+  if (!ds_target.empty()) {
+    if (!ds_pending_target.empty() && ds_pending_target == ds_target &&
+        GetTickCount64() - ds_pending_ms < 1000) {
+      record_combat_damage(self, "player", "outgoing", "damage_shield", ds_pending_target, ds_pending_amount);
+    }
+    ds_pending_target.clear();
+    return;
+  }
+
+  // Damage shield, part 1: buffer "<target> was hit by non-melee for <N> points of damage." Kept
+  // rather than recorded, because this message is also how ordinary spell damage is announced.
+  static const char kNonMelee[] = " was hit by non-melee for ";
+  const size_t nm = line.find(kNonMelee);
+  if (nm != std::string::npos) {
+    const long long amount = read_number(line, nm + sizeof(kNonMelee) - 1);
+    if (amount > 0) {
+      ds_pending_target = line.substr(0, nm);
+      ds_pending_amount = amount;
+      ds_pending_ms = GetTickCount64();
+    }
+    return;
+  }
 
   // DoT tick (caster-side): "<target> has taken <N> damage from your <spell>."
   // Observer form:          "<target> has taken <N> damage from <caster>'s <spell>."

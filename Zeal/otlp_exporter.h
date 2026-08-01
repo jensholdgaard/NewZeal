@@ -150,6 +150,12 @@ class OtlpExporter {
   // Deliberately not persisted - it is spammy, and should not survive a session by accident.
   std::atomic<bool> debug_hits{false};
 
+  // Damage shield pairing state (game thread only, via the chat callback): the amount from the most
+  // recent "was hit by non-melee" message, claimed by a shield flavour line naming the same target.
+  std::string ds_pending_target;
+  long long ds_pending_amount = 0;
+  unsigned long long ds_pending_ms = 0;
+
   // Lightweight send stats surfaced by `/otlp status`.
   std::atomic<unsigned long long> logs_posted{0};
   std::atomic<unsigned long long> metrics_posted{0};
