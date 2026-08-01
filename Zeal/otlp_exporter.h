@@ -142,6 +142,8 @@ class OtlpExporter {
   std::atomic<unsigned long long> metrics_posted{0};
   std::atomic<unsigned long long> failed_posts{0};
   std::atomic<int> last_http_status{0};
+  std::mutex last_error_mutex;
+  std::string last_error;  // response body / failure reason of the most recent failed post
 
   mutable std::mutex snapshot_mutex;
   Snapshot snapshot;

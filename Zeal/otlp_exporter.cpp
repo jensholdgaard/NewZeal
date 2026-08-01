@@ -219,6 +219,12 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                              Zeal::Game::print_chat("  sent: %llu log batches-worth, %llu metric posts, %llu failed",
                                                     logs_posted.load(), metrics_posted.load(), failed_posts.load());
                              Zeal::Game::print_chat("  last HTTP status: %i", last_http_status.load());
+                             {
+                               std::lock_guard<std::mutex> lock(last_error_mutex);
+                               if (!last_error.empty())
+                                 Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "  last error: %s",
+                                                        last_error.c_str());
+                             }
                              Zeal::Game::print_chat("Usage: /otlp on|off|status|endpoint <url>|flush <ms>|scope self|all");
                              return true;
                            });
@@ -745,6 +751,17 @@ bool OtlpExporter::post_json(const std::string &path, const std::string &json_bo
                               &status, &size, WINHTTP_NO_HEADER_INDEX);
           last_http_status.store(static_cast<int>(status));
           ok = (status >= 200 && status < 300);
+          if (!ok) {
+            // Keep the server's explanation — it names the exact problem (e.g. a malformed field),
+            // which is otherwise invisible from in-game.
+            std::string body;
+            char buf[512];
+            DWORD read = 0;
+            while (body.size() < 400 && WinHttpReadData(request, buf, sizeof(buf), &read) && read > 0)
+              body.append(buf, read);
+            std::lock_guard<std::mutex> lock(last_error_mutex);
+            last_error = path + " -> " + std::to_string(status) + " " + body.substr(0, 300);
+          }
         }
         WinHttpCloseHandle(request);
       }
