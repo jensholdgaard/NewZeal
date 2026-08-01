@@ -190,6 +190,14 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                         : (spell_id > 0)            ? "spell"
                                                     : melee_type_name(type);
     const std::string tgt = target ? target->Name : "";  // raw spawn name, e.g. "a_temple_guard00"
+    if (debug_hits.load()) {
+      // The raw packet fields, before interpretation: `type` is a SkillType for melee but a
+      // DmgShieldType (244..249) for a damage shield, and spell_id is -1 (SPELL_UNKNOWN) when the
+      // server sends no spell. Printing both is what makes a misclassification visible.
+      Zeal::Game::print_chat("[otlp] %s -> %s  type=%u spell=%d dmg=%d  => %s (%s)", src.c_str(), tgt.c_str(),
+                             static_cast<unsigned int>(type), static_cast<int>(spell_id), static_cast<int>(damage),
+                             dtype, direction);
+    }
     if (in_combat_scope(src)) record_combat_damage(src, src_type, direction, dtype, tgt, damage);
     // Fight spans: track encounters with NPCs (the mob is the target when we hit it, the source
     // when it hits us).
@@ -205,7 +213,9 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
     if (is_enabled()) fight_tick();
   });
 
-  zeal->commands_hook->Add("/otlp", {}, "OTLP/HTTP telemetry export. Usage: /otlp on|off|status|endpoint <url>",
+  zeal->commands_hook->Add("/otlp", {},
+                           "OTLP/HTTP telemetry export. Usage: /otlp on|off|status|endpoint <url>|flush <ms>|"
+                           "scope self|all|debug",
                            [this](std::vector<std::string> &args) {
                              if (args.size() == 2 && Zeal::String::compare_insensitive(args[1], "on")) {
                                setting_enabled.set(true);
@@ -232,6 +242,15 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                                if (ms < kMinFlushMs) ms = kMinFlushMs;  // Clamp: metrics are periodic; 0 would just hammer.
                                setting_flush_ms.set(ms);
                                Zeal::Game::print_chat("OTLP flush interval set to %ims", ms);
+                               return true;
+                             }
+                             if (args.size() == 2 && Zeal::String::compare_insensitive(args[1], "debug")) {
+                               const bool on = !debug_hits.load();
+                               debug_hits.store(on);
+                               Zeal::Game::print_chat(
+                                   on ? "OTLP hit debug ON - every recorded hit prints its raw packet fields. "
+                                        "Spammy; /otlp debug again to stop."
+                                      : "OTLP hit debug off.");
                                return true;
                              }
                              if (args.size() == 3 && Zeal::String::compare_insensitive(args[1], "scope")) {

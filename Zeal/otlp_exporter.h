@@ -145,6 +145,11 @@ class OtlpExporter {
   // when the whole guild reports). "all" = record every attacker seen in the log (solo experiment).
   ZealSetting<std::string> setting_combat_scope = {"self", "Zeal", "OtlpCombatScope", false};
 
+  // `/otlp debug`: echo the raw fields of every recorded hit to chat, so a classification can be
+  // checked against what the server actually sent rather than against what we believe it sends.
+  // Deliberately not persisted - it is spammy, and should not survive a session by accident.
+  std::atomic<bool> debug_hits{false};
+
   // Lightweight send stats surfaced by `/otlp status`.
   std::atomic<unsigned long long> logs_posted{0};
   std::atomic<unsigned long long> metrics_posted{0};
