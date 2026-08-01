@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <deque>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -34,7 +35,45 @@ class OtlpExporter {
   // color, recorded as a log attribute.
   void log(const std::string &body, int color_index);
 
+#ifdef ZEAL_OTLP_SDK
+  // Called from the SDK's observable-gauge callbacks (reader thread). void* keeps the otel types
+  // out of this header; the .cpp casts back to ObserverResult.
+  void observe_attack(void *result_ptr);
+  void observe_haste(void *result_ptr);
+#endif
+
  private:
+#ifdef ZEAL_OTLP_SDK
+  // ---- opentelemetry-cpp backed implementation (see otlp_exporter_sdk.cpp) -------------------
+  struct Snapshot {
+    bool in_game = false;
+    std::string name, zone;
+    const char *class_name = "Unknown";
+    int level = 0, deity = 0, aa_unspent = 0;
+    int str = 0, sta = 0, dex = 0, agi = 0, wis = 0, intel = 0, cha = 0;
+    bool have_attack = false, have_haste = false;
+    long long attack = 0, haste = 0;
+  };
+  struct Impl;  // holds the SDK providers/instruments; opaque so otel headers stay in the .cpp
+
+  void sample_game_state();
+  void record_combat_damage(const std::string &source, const std::string &source_type, const std::string &direction,
+                            const std::string &type, const std::string &target, long long amount);
+  void record_heal(const std::string &source, const std::string &direction, long long amount);
+  void parse_dot_or_heal(const std::string &line);
+  bool in_combat_scope(const std::string &source) const;
+
+  std::unique_ptr<Impl> impl;
+  mutable std::mutex snapshot_mutex;
+  Snapshot snapshot;
+
+  ZealSetting<bool> setting_enabled = {false, "Zeal", "OtlpEnabled", false};
+  ZealSetting<std::string> setting_endpoint = {"http://127.0.0.1:4318", "Zeal", "OtlpEndpoint", false};
+  ZealSetting<int> setting_flush_ms = {2000, "Zeal", "OtlpFlushMs", false};
+  ZealSetting<std::string> setting_combat_scope = {"self", "Zeal", "OtlpCombatScope", false};
+  std::atomic<unsigned long long> logs_posted{0};
+  std::atomic<unsigned long long> metrics_posted{0};
+#else
   struct LogRecord {
     unsigned long long time_unix_nano = 0;
     std::string body;
@@ -156,4 +195,5 @@ class OtlpExporter {
   std::map<std::string, ActiveFight> active_fights;  // key: raw target name
   std::mutex spans_mutex;
   std::vector<FightSpan> completed_spans;
+#endif  // ZEAL_OTLP_SDK
 };

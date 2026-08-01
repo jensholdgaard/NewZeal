@@ -192,6 +192,7 @@
     <ClCompile Include="nameplate.cpp" />
     <ClCompile Include="npc_give.cpp" />
     <ClCompile Include="otlp_exporter.cpp" />
+    <ClCompile Include="otlp_exporter_sdk.cpp" />
     <ClCompile Include="page10_binds.cpp" />
     <ClCompile Include="patches.cpp" />
     <ClCompile Include="physics.cpp" />

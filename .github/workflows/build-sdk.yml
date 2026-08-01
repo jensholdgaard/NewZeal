@@ -1,0 +1,94 @@
+# A/B build: Zeal linked against opentelemetry-cpp instead of the hand-rolled JSON exporter.
+# Produces Zeal-sdk.asi so the two can be compared side by side in a real (Wine) client.
+name: build-sdk
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [otlp-sdk]
+
+env:
+  SOLUTION_FILE_PATH: ./Zeal.sln
+  TRIPLET: x86-windows-static
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: microsoft/setup-msbuild@v3
+
+      # vcpkg builds protobuf+abseil+curl from source for x86 static; cache so later runs are fast.
+      - name: Cache vcpkg binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/AppData/Local/vcpkg/archives
+          key: vcpkg-${{ env.TRIPLET }}-otel-v1
+
+      - name: Install opentelemetry-cpp (x86, static CRT, OTLP/HTTP)
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install "opentelemetry-cpp[otlp-http]:$env:TRIPLET" --clean-after-build
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed" }
+
+      - name: Generate MSBuild props (include/lib paths + all static libs)
+        shell: pwsh
+        run: |
+          $inst = "$env:VCPKG_INSTALLATION_ROOT\installed\$env:TRIPLET"
+          # Link every static lib vcpkg produced — simplest correct answer for a deep dep tree
+          # (protobuf, abseil, curl, zlib, the otel exporters...). The linker drops what's unused.
+          $libs = (Get-ChildItem "$inst\lib\*.lib" | ForEach-Object { $_.Name }) -join ';'
+          $props = @"
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$inst\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>ZEAL_OTLP_SDK;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <AdditionalLibraryDirectories>$inst\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>$libs;ws2_32.lib;crypt32.lib;wldap32.lib;normaliz.lib;bcrypt.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+</Project>
+"@
+          Set-Content -Path "$env:GITHUB_WORKSPACE\otel-sdk.props" -Value $props -Encoding UTF8
+          Write-Host "linking $((($libs -split ';').Count)) static libs"
+
+      - name: Build Zeal (SDK exporter)
+        shell: pwsh
+        run: |
+          $sha = git rev-parse --short HEAD
+          msbuild /m /p:Configuration=Release /p:Platform=x86 `
+            /p:zeal_build_version="$sha-sdk" `
+            /p:LanguageStandard=stdcpp20 `
+            /p:ForceImportBeforeCppTargets="$env:GITHUB_WORKSPACE\otel-sdk.props" `
+            /p:ExportHeader="" /p:ScanDependencies="" `
+            $env:SOLUTION_FILE_PATH
+
+      - name: Size comparison
+        shell: pwsh
+        run: |
+          $asi = Get-Item Release\Zeal.asi
+          "{0,-24} {1,10:N2} MB" -f "Zeal-sdk.asi", ($asi.Length/1MB)
+          "(hand-rolled build is ~11.6 MB for reference)"
+
+      - name: Rename artifact so it can't be confused with the normal build
+        shell: pwsh
+        run: Copy-Item Release\Zeal.asi Release\Zeal-sdk.asi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: zeal-sdk
+          path: |
+            Release/Zeal-sdk.asi
+            Release/Zeal.pdb

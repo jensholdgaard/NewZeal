@@ -1,3 +1,4 @@
+#ifndef ZEAL_OTLP_SDK  // hand-rolled JSON exporter; the SDK build uses otlp_exporter_sdk.cpp
 #include "otlp_exporter.h"
 
 #include <winhttp.h>
@@ -771,3 +772,5 @@ bool OtlpExporter::post_json(const std::string &path, const std::string &json_bo
   }
   return ok;
 }
+
+#endif  // !ZEAL_OTLP_SDK

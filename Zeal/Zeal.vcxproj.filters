@@ -434,6 +434,9 @@
     <ClCompile Include="otlp_exporter.cpp">
       <Filter>Source Files\other</Filter>
     </ClCompile>
+    <ClCompile Include="otlp_exporter_sdk.cpp">
+      <Filter>Source Files\other</Filter>
+    </ClCompile>
     <ClCompile Include="physics.cpp">
       <Filter>Source Files\hooks</Filter>
     </ClCompile>
