@@ -19,6 +19,8 @@ jobs:
   build:
     name: Build and upload artifacts
     runs-on: windows-2022
+    outputs:
+      artifact: zeal-${{ steps.zeal_version.outputs.version }}-${{ steps.parse_git.outputs.short_hash }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v7
@@ -67,3 +69,35 @@ jobs:
             Release/Zeal.pdb
             Zeal/uifiles
             README.md
+
+  # Guild members install Zeal.asi from the otlp-preview release via the PowerShell installer, which
+  # verifies it against Zeal.asi.sha256. Publishing both from the same build is what makes that
+  # verification meaningful — a hash computed later, from the already-published file, would only ever
+  # confirm the download was not truncated.
+  publish-preview:
+    name: Publish otlp-preview release
+    needs: build
+    if: github.ref == 'refs/heads/otlp-exporter'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download the build
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: dist
+
+      - name: Hash and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          cd dist/Release
+          sha256sum Zeal.asi | awk '{print $1"  Zeal.asi"}' > Zeal.asi.sha256
+          cat Zeal.asi.sha256
+          gh release view otlp-preview -R "$REPO" >/dev/null 2>&1 || \
+            gh release create otlp-preview -R "$REPO" --prerelease \
+              --title "OTLP preview" \
+              --notes "Rolling build of the OTLP exporter branch, installed by the guild PowerShell installer."
+          gh release upload otlp-preview Zeal.asi Zeal.asi.sha256 --clobber -R "$REPO"
