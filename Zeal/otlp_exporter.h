@@ -138,8 +138,8 @@ class OtlpExporter {
   std::map<std::tuple<std::string, std::string, std::string, std::string, std::string, std::string, std::string>,
            CombatTotal>
       combat_damage;
-  // {source, direction(outgoing=done, incoming=received), zone} -> total hitpoints.
-  std::map<std::tuple<std::string, std::string, std::string>, long long> combat_heal;
+  // {source, direction(outgoing=done, incoming=received), zone, group_leader} -> total hitpoints.
+  std::map<std::tuple<std::string, std::string, std::string, std::string>, long long> combat_heal;
 
   // "self" = record only the local character + its pet (authoritative per-player, no double counting
   // when the whole guild reports). "all" = record every attacker seen in the log (solo experiment).

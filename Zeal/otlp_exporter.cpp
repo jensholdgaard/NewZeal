@@ -472,8 +472,9 @@ void OtlpExporter::record_combat_damage(const std::string &source, const std::st
 
 void OtlpExporter::record_heal(const std::string &source, const std::string &direction, long long amount) {
   const std::string zone = current_zone_name();
+  const std::string group = current_group_leader();  // healing belongs to the group it happened in
   std::lock_guard<std::mutex> lock(metrics_mutex);
-  combat_heal[{source, direction, zone}] += amount;
+  combat_heal[{source, direction, zone, group}] += amount;
 }
 
 // Extracts the positive integer that starts at line[pos] (returns 0 if none).
@@ -593,10 +594,13 @@ std::string OtlpExporter::build_metrics_payload() {
   {
     std::lock_guard<std::mutex> lock(metrics_mutex);
     for (const auto &[key, total] : combat_heal) {
-      heal_points.push_back({{"attributes",
-                              {string_attr(everquest_semconv::kEverquestCombatSource, std::get<0>(key)),
-                               string_attr(everquest_semconv::kEverquestCombatDirection, std::get<1>(key)),
-                               string_attr(everquest_semconv::kEverquestZoneName, std::get<2>(key))}},
+      nlohmann::json attrs =
+          nlohmann::json::array({string_attr(everquest_semconv::kEverquestCombatSource, std::get<0>(key)),
+                                 string_attr(everquest_semconv::kEverquestCombatDirection, std::get<1>(key)),
+                                 string_attr(everquest_semconv::kEverquestZoneName, std::get<2>(key))});
+      if (!std::get<3>(key).empty())
+        attrs.push_back(string_attr(everquest_semconv::kEverquestGroupLeader, std::get<3>(key)));
+      heal_points.push_back({{"attributes", attrs},
                              {"startTimeUnixNano", start},
                              {"timeUnixNano", now},
                              {"asInt", std::to_string(total)}});

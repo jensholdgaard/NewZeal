@@ -168,6 +168,12 @@
                         "value": {
                           "stringValue": "Dawnshroud Peaks"
                         }
+                      },
+                      {
+                        "key": "everquest.group.leader",
+                        "value": {
+                          "stringValue": "Controels"
+                        }
                       }
                     ],
                     "startTimeUnixNano": "1785540000000000000",
