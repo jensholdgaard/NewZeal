@@ -79,6 +79,29 @@ std::string current_group_leader() {
   return gi->LeaderName;
 }
 
+// True if `name` is the local character or one of their group-mates. Game thread only.
+bool in_my_group(const std::string &name) {
+  const Zeal::GameStructures::GroupInfo *gi = Zeal::Game::GroupInfo;
+  if (!Zeal::Game::is_in_game() || !gi || !gi->is_in_group()) return false;
+  Zeal::GameStructures::GAMECHARINFO *ci = Zeal::Game::get_char_info();
+  if (ci && name == ci->Name) return true;
+  for (int i = 0; i < GAME_NUM_GROUP_MEMBERS; ++i)
+    if (gi->IsValidList[i] && name == gi->Names[i]) return true;
+  return false;
+}
+
+// The group a damage/heal record belongs to, or "" for none.
+//
+// Under `/otlp scope all` we record every attacker we can see, including players who are not grouped
+// with us - and stamping our own leader on their damage would fold strangers into our group's total.
+// So the label is only attached when the damage is genuinely the group's: dealt by a group member
+// (pets already resolve to their owner before this point), or taken by us, which is by definition a
+// group member taking damage.
+std::string group_for(const std::string &source, const std::string &direction) {
+  const bool ours = (direction == "incoming") || in_my_group(source);
+  return ours ? current_group_leader() : "";
+}
+
 const char *class_name(int class_id) {
   switch (class_id) {
     case 1: return "Warrior";
@@ -484,7 +507,7 @@ void OtlpExporter::record_combat_damage(const std::string &source, const std::st
                                         const std::string &direction, const std::string &type,
                                         const std::string &target, long long amount) {
   const std::string zone = current_zone_name();     // where the hit happened (game thread)
-  const std::string group = current_group_leader();  // which group it was dealt in
+  const std::string group = group_for(source, direction);  // "" unless it is genuinely our group's
   std::lock_guard<std::mutex> lock(metrics_mutex);
   CombatTotal &entry = combat_damage[{source, source_type, direction, type, zone, target, group}];
   entry.total += amount;
@@ -493,7 +516,7 @@ void OtlpExporter::record_combat_damage(const std::string &source, const std::st
 
 void OtlpExporter::record_heal(const std::string &source, const std::string &direction, long long amount) {
   const std::string zone = current_zone_name();
-  const std::string group = current_group_leader();  // healing belongs to the group it happened in
+  const std::string group = group_for(source, direction);  // "" unless it is genuinely our group's
   std::lock_guard<std::mutex> lock(metrics_mutex);
   combat_heal[{source, direction, zone, group}] += amount;
 }
