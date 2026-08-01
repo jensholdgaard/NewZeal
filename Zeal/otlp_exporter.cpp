@@ -5,6 +5,7 @@
 #include <cctype>
 #include <chrono>
 #include <cstdlib>
+#include <random>
 
 #include "callbacks.h"
 #include "chat.h"
@@ -31,6 +32,30 @@ nlohmann::json int_attr(const char *key, long long value) {
 unsigned long long now_unix_nano() {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch())
       .count();
+}
+
+// Random hex id for traces/spans (game thread only; single static generator).
+std::string hex_id(int bytes) {
+  static std::mt19937_64 rng(std::random_device{}() ^ GetTickCount64());
+  static const char *digits = "0123456789abcdef";
+  std::string out;
+  out.reserve(bytes * 2);
+  for (int i = 0; i < bytes; i += 8) {
+    unsigned long long v = rng();
+    for (int b = 0; b < 8 && (i + b) < bytes; b++) {
+      out.push_back(digits[(v >> (b * 8 + 4)) & 0xF]);
+      out.push_back(digits[(v >> (b * 8)) & 0xF]);
+    }
+  }
+  return out;
+}
+
+// "a_temple_guard00" -> "a temple guard" (lowercase, underscores to spaces, trailing digits dropped)
+std::string display_of(const std::string &raw) {
+  std::string d = raw;
+  while (!d.empty() && isdigit(static_cast<unsigned char>(d.back()))) d.pop_back();
+  for (auto &c : d) c = (c == '_') ? ' ' : static_cast<char>(tolower(static_cast<unsigned char>(c)));
+  return d;
 }
 
 // Full zone name of the local player ("" when not resolvable). Game thread only.
@@ -112,6 +137,7 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
     // DoT ticks and heal amounts never fire the hit event and are only messaged to the involved
     // client, so text is the correct (and self-reporting, non-duplicating) channel for them.
     parse_dot_or_heal(data);
+    handle_slain_line(data);
   });
 
   // (see parse_dot_or_heal below for DoT/heal text handling)
@@ -132,11 +158,19 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
     const char *dtype = (spell_id > 0) ? "spell" : melee_type_name(type);
     const std::string tgt = target ? target->Name : "";  // raw spawn name, e.g. "a_temple_guard00"
     if (in_combat_scope(src)) record_combat_damage(src, src_type, direction, dtype, tgt, damage);
+    // Fight spans: track encounters with NPCs (the mob is the target when we hit it, the source
+    // when it hits us).
+    const bool outgoing = (direction[0] == 'o');
+    const std::string mob = outgoing ? tgt : std::string(source->Name);
+    if (!mob.empty()) note_fight_damage(mob, outgoing, damage);
   });
 
   // Sample live game state on the game thread (MainLoop); the sender thread only ever serializes the
   // cached snapshot, so it never races the game thread reading/freeing character structures.
-  zeal->callbacks->AddGeneric([this]() { sample_game_state(); });
+  zeal->callbacks->AddGeneric([this]() {
+    sample_game_state();
+    if (is_enabled()) fight_tick();
+  });
 
   zeal->commands_hook->Add("/otlp", {}, "OTLP/HTTP telemetry export. Usage: /otlp on|off|status|endpoint <url>",
                            [this](std::vector<std::string> &args) {
@@ -251,6 +285,8 @@ void OtlpExporter::worker_loop() {
         else
           failed_posts++;
       }
+      std::string traces = build_traces_payload();
+      if (!traces.empty() && !post_json("/v1/traces", traces)) failed_posts++;
     } catch (const std::exception &) {
       // Never let telemetry take down the game; drop this cycle on failure.
     }
@@ -444,7 +480,9 @@ void OtlpExporter::parse_dot_or_heal(const std::string &line) {
 static nlohmann::json gauge_metric(const char *name, const char *unit, const std::string &now, long long value,
                                    const std::string &zone) {
   nlohmann::json point = {{"timeUnixNano", now}, {"asInt", std::to_string(value)}};
-  if (!zone.empty()) point["attributes"] = {string_attr("eq.zone.name", zone)};
+  // NOTE: must be an explicit array — a braced-init with a single object collapses into an object,
+  // which the OTLP receiver rejects ("ReadArray: expect [ ..."), failing the whole payload.
+  if (!zone.empty()) point["attributes"] = nlohmann::json::array({string_attr("eq.zone.name", zone)});
   nlohmann::json metric;
   metric["name"] = name;
   metric["unit"] = unit;
@@ -536,6 +574,138 @@ std::string OtlpExporter::build_metrics_payload() {
 
   nlohmann::json payload;
   payload["resourceMetrics"] = nlohmann::json::array({resource_metrics});
+  return payload.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+}
+
+
+void OtlpExporter::note_fight_damage(const std::string &raw_target, bool outgoing, long long dmg) {
+  const unsigned long long now = now_unix_nano();
+  ActiveFight &f = active_fights[raw_target];
+  if (f.start_ns == 0) {
+    f.span_id = hex_id(8);
+    f.display = display_of(raw_target);
+    f.start_ns = now;
+  }
+  f.last_ns = now;
+  (outgoing ? f.dmg_out : f.dmg_in) += dmg;
+}
+
+void OtlpExporter::end_fight(const std::string &key, const char *outcome, unsigned long long end_ns) {
+  auto it = active_fights.find(key);
+  if (it == active_fights.end()) return;
+  const ActiveFight &f = it->second;
+  FightSpan sp;
+  sp.trace_id = zone_trace_id.empty() ? hex_id(16) : zone_trace_id;
+  sp.span_id = f.span_id;
+  sp.parent_span_id = zone_span_id;  // child of the zone-session span ("" when none)
+  sp.name = "fight " + f.display;
+  sp.start_ns = f.start_ns;
+  sp.end_ns = end_ns ? end_ns : f.last_ns;
+  sp.str_attrs = {{"eq.combat.target", key}, {"eq.zone.name", zone_active}, {"eq.fight.outcome", outcome}};
+  sp.int_attrs = {{"eq.fight.damage.dealt", f.dmg_out}, {"eq.fight.damage.taken", f.dmg_in}};
+  {
+    std::lock_guard<std::mutex> lock(spans_mutex);
+    completed_spans.push_back(std::move(sp));
+  }
+  active_fights.erase(it);
+}
+
+void OtlpExporter::fight_tick() {
+  const unsigned long long now = now_unix_nano();
+  const std::string zone = current_zone_name();
+
+  if (zone != zone_active) {  // zone transition (incl. entering/leaving the world)
+    for (auto it = active_fights.begin(); it != active_fights.end();) {
+      const std::string key = it->first;
+      ++it;
+      end_fight(key, "zoned", 0);
+    }
+    if (!zone_active.empty() && zone_start_ns) {  // close the previous zone-session span
+      FightSpan sp;
+      sp.trace_id = zone_trace_id;
+      sp.span_id = zone_span_id;
+      sp.name = "zone " + zone_active;
+      sp.start_ns = zone_start_ns;
+      sp.end_ns = now;
+      sp.str_attrs = {{"eq.zone.name", zone_active}};
+      std::lock_guard<std::mutex> lock(spans_mutex);
+      completed_spans.push_back(std::move(sp));
+    }
+    zone_active = zone;
+    if (!zone.empty()) {
+      zone_trace_id = hex_id(16);
+      zone_span_id = hex_id(8);
+      zone_start_ns = now;
+    } else {
+      zone_trace_id.clear();
+      zone_span_id.clear();
+      zone_start_ns = 0;
+    }
+    return;
+  }
+
+  // Idle sweep: a fight with no damage for kFightIdleNs is over (mob fled/reset/we moved on).
+  for (auto it = active_fights.begin(); it != active_fights.end();) {
+    const std::string key = it->first;
+    const bool idle = (now - it->second.last_ns) > kFightIdleNs;
+    ++it;
+    if (idle) end_fight(key, "idle", 0);
+  }
+}
+
+void OtlpExporter::handle_slain_line(const std::string &line) {
+  if (active_fights.empty()) return;
+  std::string dead;
+  size_t p = line.find(" has been slain");
+  if (p != std::string::npos) {
+    dead = line.substr(0, p);
+  } else if (line.rfind("You have slain ", 0) == 0) {
+    size_t bang = line.find('!');
+    dead = line.substr(15, (bang == std::string::npos ? line.size() : bang) - 15);
+  } else {
+    return;
+  }
+  for (auto &c : dead) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+  for (auto &[key, f] : active_fights) {
+    if (f.display == dead) {
+      end_fight(key, "killed", now_unix_nano());
+      return;
+    }
+  }
+}
+
+std::string OtlpExporter::build_traces_payload() {
+  std::vector<FightSpan> batch;
+  {
+    std::lock_guard<std::mutex> lock(spans_mutex);
+    if (completed_spans.empty()) return "";
+    batch.swap(completed_spans);
+  }
+  nlohmann::json spans = nlohmann::json::array();
+  for (const auto &sp : batch) {
+    nlohmann::json attrs = nlohmann::json::array();
+    for (const auto &[k, v] : sp.str_attrs) attrs.push_back(string_attr(k.c_str(), v));
+    for (const auto &[k, v] : sp.int_attrs) attrs.push_back(int_attr(k.c_str(), v));
+    nlohmann::json j;
+    j["traceId"] = sp.trace_id;
+    j["spanId"] = sp.span_id;
+    if (!sp.parent_span_id.empty()) j["parentSpanId"] = sp.parent_span_id;
+    j["name"] = sp.name;
+    j["kind"] = 1;  // SPAN_KIND_INTERNAL
+    j["startTimeUnixNano"] = std::to_string(sp.start_ns);
+    j["endTimeUnixNano"] = std::to_string(sp.end_ns);
+    j["attributes"] = attrs;
+    j["status"] = nlohmann::json::object();
+    spans.push_back(j);
+  }
+  nlohmann::json scope_spans;
+  scope_spans["scope"] = {{"name", "zeal"}, {"version", ZEAL_VERSION}};
+  scope_spans["spans"] = spans;
+  nlohmann::json resource_spans;
+  resource_spans["resource"] = {{"attributes", build_resource_attributes()}};
+  resource_spans["scopeSpans"] = nlohmann::json::array({scope_spans});
+  nlohmann::json payload;
+  payload["resourceSpans"] = nlohmann::json::array({resource_spans});
   return payload.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 

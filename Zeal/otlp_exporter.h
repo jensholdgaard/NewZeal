@@ -81,6 +81,31 @@ class OtlpExporter {
   // Serializes the current cumulative counter snapshot as an OTLP metrics payload ("" if empty).
   std::string build_metrics_payload();
 
+  // --- Fight/zone tracing (spans) -------------------------------------------------------------
+  struct FightSpan {  // a completed span, queued for export
+    std::string trace_id, span_id, parent_span_id, name;
+    unsigned long long start_ns = 0, end_ns = 0;
+    std::vector<std::pair<std::string, std::string>> str_attrs;
+    std::vector<std::pair<std::string, long long>> int_attrs;
+  };
+  struct ActiveFight {
+    std::string span_id;
+    std::string display;  // normalized display name, for matching "slain" chat lines
+    unsigned long long start_ns = 0, last_ns = 0;
+    long long dmg_out = 0, dmg_in = 0;
+  };
+
+  // Called from the hit event (game thread); opens the fight span on first damage.
+  void note_fight_damage(const std::string &raw_target, bool outgoing, long long dmg);
+  // Game-thread tick: zone-session transitions and idle-fight sweep.
+  void fight_tick();
+  // Ends one active fight into completed_spans. Caller holds no lock (game thread only state).
+  void end_fight(const std::string &key, const char *outcome, unsigned long long end_ns);
+  // Chat hook: "X has been slain..." / "You have slain X!" closes the matching fight.
+  void handle_slain_line(const std::string &line);
+  // Drains completed spans into an OTLP traces payload ("" if none).
+  std::string build_traces_payload();
+
   ZealSetting<bool> setting_enabled = {false, "Zeal", "OtlpEnabled", false};
   ZealSetting<std::string> setting_endpoint = {"http://127.0.0.1:4318", "Zeal", "OtlpEndpoint", false};
   ZealSetting<int> setting_flush_ms = {2000, "Zeal", "OtlpFlushMs", false};
@@ -120,4 +145,13 @@ class OtlpExporter {
 
   mutable std::mutex snapshot_mutex;
   Snapshot snapshot;
+
+  // Fight tracing state. active_* is touched ONLY on the game thread; completed_spans is the
+  // handoff queue to the sender thread (guarded by spans_mutex).
+  static constexpr unsigned long long kFightIdleNs = 30ULL * 1000000000ULL;  // fight ends after 30s without damage
+  std::string zone_trace_id, zone_span_id, zone_active;
+  unsigned long long zone_start_ns = 0;
+  std::map<std::string, ActiveFight> active_fights;  // key: raw target name
+  std::mutex spans_mutex;
+  std::vector<FightSpan> completed_spans;
 };
