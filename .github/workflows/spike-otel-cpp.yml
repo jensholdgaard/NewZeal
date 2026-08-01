@@ -1,0 +1,53 @@
+# EXPERIMENT (not part of the normal build): can opentelemetry-cpp be built for the same target as
+# Zeal — x86 (32-bit) with the static CRT — and what does it cost in time and binary size?
+name: spike-otel-cpp
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - name: Zeal's build target (for comparison)
+        shell: bash
+        run: echo "Zeal builds x86 /MT (static CRT). vcpkg equivalent triplet: x86-windows-static"
+
+      - name: Build opentelemetry-cpp (x86, static CRT, OTLP HTTP exporter)
+        id: build
+        shell: pwsh
+        run: |
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          $env:VCPKG_ROOT = "$env:VCPKG_INSTALLATION_ROOT"
+          & "$env:VCPKG_ROOT\vcpkg.exe" install "opentelemetry-cpp[otlp-http]:x86-windows-static" --clean-after-build 2>&1 | Tee-Object -FilePath vcpkg.log
+          $code = $LASTEXITCODE
+          $sw.Stop()
+          "minutes=$([int]$sw.Elapsed.TotalMinutes)" >> $env:GITHUB_OUTPUT
+          "exit=$code" >> $env:GITHUB_OUTPUT
+          exit 0
+
+      - name: Result — buildable? how long? how big?
+        shell: pwsh
+        run: |
+          Write-Host "=== exit code: ${{ steps.build.outputs.exit }} (0 = builds cleanly) ==="
+          Write-Host "=== wall time: ${{ steps.build.outputs.minutes }} minutes ==="
+          $inst = "$env:VCPKG_INSTALLATION_ROOT\installed\x86-windows-static"
+          if (Test-Path $inst) {
+            $libs = Get-ChildItem "$inst\lib\*.lib" -ErrorAction SilentlyContinue
+            $total = ($libs | Measure-Object Length -Sum).Sum / 1MB
+            Write-Host ("=== static libs: {0} files, {1:N1} MB total ===" -f $libs.Count, $total)
+            $libs | Sort-Object Length -Descending | Select-Object -First 15 |
+              ForEach-Object { "{0,-45} {1,8:N1} MB" -f $_.Name, ($_.Length/1MB) }
+            Write-Host "=== transitive deps pulled in ==="
+            Get-ChildItem "$inst\include" -Directory | Select-Object -ExpandProperty Name
+          } else {
+            Write-Host "install tree missing — build failed; tail of log:"
+            Get-Content vcpkg.log -Tail 40
+          }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spike-log
+          path: vcpkg.log
