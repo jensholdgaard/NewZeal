@@ -1,0 +1,25 @@
+{"resourceMetrics":[{"resource":{"attributes":[
+ {"key":"service.name","value":{"stringValue":"everquest"}},
+ {"key":"service.instance.id","value":{"stringValue":"Controels"}},
+ {"key":"eq.character.class","value":{"stringValue":"Bard"}},
+ {"key":"eq.character.level","value":{"intValue":"60"}}]},
+ "scopeMetrics":[{"scope":{"name":"zeal","version":"1.4.5"},"metrics":[
+  {"name":"eq.combat.damage","unit":"{hitpoint}","sum":{"dataPoints":[{"attributes":[
+    {"key":"eq.combat.source","value":{"stringValue":"Controels"}},
+    {"key":"eq.combat.source_type","value":{"stringValue":"player"}},
+    {"key":"eq.combat.direction","value":{"stringValue":"outgoing"}},
+    {"key":"eq.combat.damage.type","value":{"stringValue":"slash"}},
+    {"key":"eq.zone.name","value":{"stringValue":"Dawnshroud Peaks"}},
+    {"key":"eq.combat.target","value":{"stringValue":"a_temple_guard00"}}],
+    "startTimeUnixNano":"1785540000000000000","timeUnixNano":"1785540000000000000","asInt":"1234"}],
+    "aggregationTemporality":2,"isMonotonic":true}},
+  {"name":"eq.combat.heal","unit":"{hitpoint}","sum":{"dataPoints":[{"attributes":[
+    {"key":"eq.combat.source","value":{"stringValue":"Controels"}},
+    {"key":"eq.combat.direction","value":{"stringValue":"outgoing"}},
+    {"key":"eq.zone.name","value":{"stringValue":"Dawnshroud Peaks"}}],
+    "startTimeUnixNano":"1785540000000000000","timeUnixNano":"1785540000000000000","asInt":"500"}],
+    "aggregationTemporality":2,"isMonotonic":true}},
+  {"name":"eq.character.attack","unit":"1","gauge":{"dataPoints":[{"timeUnixNano":"1785540000000000000","asInt":"1280",
+    "attributes":[{"key":"eq.zone.name","value":{"stringValue":"Dawnshroud Peaks"}}]}]}},
+  {"name":"eq.character.haste","unit":"%","gauge":{"dataPoints":[{"timeUnixNano":"1785540000000000000","asInt":"91",
+    "attributes":[{"key":"eq.zone.name","value":{"stringValue":"Dawnshroud Peaks"}}]}]}}]}]}]}

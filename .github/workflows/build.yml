@@ -44,6 +44,14 @@ jobs:
           ZEAL_VERSION=$(grep '#define ZEAL_VERSION' Zeal/zeal.h | sed "$SED_PARAMS")
           echo version=v$ZEAL_VERSION >> $GITHUB_OUTPUT
 
+      # The exporter hand-builds OTLP JSON, so validate our payload shapes against the official
+      # opentelemetry-proto schema — catches "valid JSON, invalid OTLP" before it can ship.
+      - name: Validate OTLP payload shapes against the official schema
+        shell: bash
+        run: |
+          python -m pip install --quiet opentelemetry-proto
+          python ci/otlp_validate.py ci/fixtures/*.json
+
       - name: Build
         env:
           ZEAL_BUILD_VERSION: ${{ steps.parse_git.outputs.short_hash }}
