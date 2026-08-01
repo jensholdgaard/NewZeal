@@ -12,7 +12,8 @@ jobs:
     steps:
       - name: Zeal's build target (for comparison)
         shell: bash
-        run: echo "Zeal builds x86 /MT (static CRT). vcpkg equivalent triplet: x86-windows-static"
+        run: |
+          echo "Zeal builds x86 /MT (static CRT); vcpkg equivalent triplet is x86-windows-static"
 
       - name: Build opentelemetry-cpp (x86, static CRT, OTLP HTTP exporter)
         id: build
