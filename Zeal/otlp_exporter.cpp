@@ -13,6 +13,7 @@
 #include "chat.h"
 #include "commands.h"
 #include "entity_manager.h"
+#include "game_addresses.h"  // Zeal::Game::GroupInfo
 #include "game_functions.h"
 #include "game_structures.h"
 #include "json.hpp"
