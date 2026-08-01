@@ -2,5 +2,5 @@
  "scopeLogs":[{"scope":{"name":"zeal","version":"1.4.5"},"logRecords":[
   {"timeUnixNano":"1785540000000000000","severityNumber":9,"severityText":"INFO",
    "body":{"stringValue":"You slash a temple guard for 42 points of damage."},
-   "attributes":[{"key":"eq.chat.color","value":{"intValue":"273"}},
-                 {"key":"eq.zone.id","value":{"intValue":"169"}}]}]}]}]}
+   "attributes":[{"key":"everquest.chat.color","value":{"intValue":"273"}},
+                 {"key":"everquest.zone.id","value":{"intValue":"169"}}]}]}]}]}

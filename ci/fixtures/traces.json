@@ -2,10 +2,10 @@
  "scopeSpans":[{"scope":{"name":"zeal","version":"1.4.5"},"spans":[
   {"traceId":"5b8efff798038103d269b633813fc60c","spanId":"eee19b7ec3c1b174",
    "name":"zone Dawnshroud Peaks","kind":1,"startTimeUnixNano":"1785540000000000000","endTimeUnixNano":"1785540000000000000",
-   "attributes":[{"key":"eq.zone.name","value":{"stringValue":"Dawnshroud Peaks"}}],"status":{}},
+   "attributes":[{"key":"everquest.zone.name","value":{"stringValue":"Dawnshroud Peaks"}}],"status":{}},
   {"traceId":"5b8efff798038103d269b633813fc60c","spanId":"aaa19b7ec3c1b175",
    "parentSpanId":"eee19b7ec3c1b174","name":"fight a temple guard","kind":1,
    "startTimeUnixNano":"1785540000000000000","endTimeUnixNano":"1785540000000000000","attributes":[
-    {"key":"eq.combat.target","value":{"stringValue":"a_temple_guard00"}},
-    {"key":"eq.fight.outcome","value":{"stringValue":"killed"}},
-    {"key":"eq.fight.damage.dealt","value":{"intValue":"1234"}}],"status":{}}]}]}]}
+    {"key":"everquest.combat.target","value":{"stringValue":"a_temple_guard00"}},
+    {"key":"everquest.fight.outcome","value":{"stringValue":"killed"}},
+    {"key":"everquest.fight.damage.dealt","value":{"intValue":"1234"}}],"status":{}}]}]}]}

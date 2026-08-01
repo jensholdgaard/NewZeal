@@ -1,5 +1,7 @@
 #include "otlp_exporter.h"
 
+#include "everquest_semconv.h"  // generated from the semconv registry (see everquest-semconv/generate.sh)
+
 #include <winhttp.h>
 
 #include <cctype>
@@ -359,18 +361,18 @@ nlohmann::json OtlpExporter::build_resource_attributes() const {
   if (s.in_game) {
     // Character name doubles as the service instance id so a shared backend can tell players apart.
     attrs.push_back(string_attr("service.instance.id", s.name));
-    attrs.push_back(string_attr("eq.character.name", s.name));
-    attrs.push_back(string_attr("eq.character.class", s.class_name));
-    attrs.push_back(int_attr("eq.character.level", s.level));
-    attrs.push_back(int_attr("eq.character.deity", s.deity));
-    attrs.push_back(int_attr("eq.character.aa.unspent", s.aa_unspent));
-    attrs.push_back(int_attr("eq.character.stat.strength", s.str));
-    attrs.push_back(int_attr("eq.character.stat.stamina", s.sta));
-    attrs.push_back(int_attr("eq.character.stat.dexterity", s.dex));
-    attrs.push_back(int_attr("eq.character.stat.agility", s.agi));
-    attrs.push_back(int_attr("eq.character.stat.wisdom", s.wis));
-    attrs.push_back(int_attr("eq.character.stat.intelligence", s.intel));
-    attrs.push_back(int_attr("eq.character.stat.charisma", s.cha));
+    attrs.push_back(string_attr(everquest_semconv::kEverquestCharacterName, s.name));
+    attrs.push_back(string_attr(everquest_semconv::kEverquestCharacterClass, s.class_name));
+    attrs.push_back(int_attr(everquest_semconv::kEverquestCharacterLevel, s.level));
+    attrs.push_back(int_attr(everquest_semconv::kEverquestCharacterDeity, s.deity));
+    attrs.push_back(int_attr(everquest_semconv::kEverquestCharacterAaUnspent, s.aa_unspent));
+    attrs.push_back(int_attr("everquest.character.stat.strength", s.str));
+    attrs.push_back(int_attr("everquest.character.stat.stamina", s.sta));
+    attrs.push_back(int_attr("everquest.character.stat.dexterity", s.dex));
+    attrs.push_back(int_attr("everquest.character.stat.agility", s.agi));
+    attrs.push_back(int_attr("everquest.character.stat.wisdom", s.wis));
+    attrs.push_back(int_attr("everquest.character.stat.intelligence", s.intel));
+    attrs.push_back(int_attr("everquest.character.stat.charisma", s.cha));
   }
   return attrs;
 }
@@ -380,8 +382,8 @@ std::string OtlpExporter::build_logs_payload(const std::vector<LogRecord> &recor
   for (const auto &r : records) {
     // Character identity now lives on the Resource; keep only per-line context here.
     nlohmann::json attributes = nlohmann::json::array();
-    attributes.push_back(int_attr("eq.chat.color", r.color_index));
-    if (r.zone_id >= 0) attributes.push_back(int_attr("eq.zone.id", r.zone_id));
+    attributes.push_back(int_attr(everquest_semconv::kEverquestChatColor, r.color_index));
+    if (r.zone_id >= 0) attributes.push_back(int_attr(everquest_semconv::kEverquestZoneId, r.zone_id));
 
     log_records.push_back({{"timeUnixNano", std::to_string(r.time_unix_nano)},
                            {"severityNumber", 9},  // INFO
@@ -488,7 +490,7 @@ static nlohmann::json gauge_metric(const char *name, const char *unit, const std
   nlohmann::json point = {{"timeUnixNano", now}, {"asInt", std::to_string(value)}};
   // NOTE: must be an explicit array — a braced-init with a single object collapses into an object,
   // which the OTLP receiver rejects ("ReadArray: expect [ ..."), failing the whole payload.
-  if (!zone.empty()) point["attributes"] = nlohmann::json::array({string_attr("eq.zone.name", zone)});
+  if (!zone.empty()) point["attributes"] = nlohmann::json::array({string_attr(everquest_semconv::kEverquestZoneName, zone)});
   nlohmann::json metric;
   metric["name"] = name;
   metric["unit"] = unit;
@@ -515,12 +517,12 @@ std::string OtlpExporter::build_metrics_payload() {
       }
       const auto &key = it->first;
       data_points.push_back({{"attributes",
-                              {string_attr("eq.combat.source", std::get<0>(key)),
-                               string_attr("eq.combat.source_type", std::get<1>(key)),
-                               string_attr("eq.combat.direction", std::get<2>(key)),
-                               string_attr("eq.combat.damage.type", std::get<3>(key)),
-                               string_attr("eq.zone.name", std::get<4>(key)),
-                               string_attr("eq.combat.target", std::get<5>(key))}},
+                              {string_attr(everquest_semconv::kEverquestCombatSource, std::get<0>(key)),
+                               string_attr(everquest_semconv::kEverquestCombatSourceType, std::get<1>(key)),
+                               string_attr(everquest_semconv::kEverquestCombatDirection, std::get<2>(key)),
+                               string_attr(everquest_semconv::kEverquestCombatDamageType, std::get<3>(key)),
+                               string_attr(everquest_semconv::kEverquestZoneName, std::get<4>(key)),
+                               string_attr(everquest_semconv::kEverquestCombatTarget, std::get<5>(key))}},
                              {"startTimeUnixNano", start},
                              {"timeUnixNano", now},
                              {"asInt", std::to_string(it->second.total)}});
@@ -529,7 +531,7 @@ std::string OtlpExporter::build_metrics_payload() {
   }
   if (!data_points.empty()) {
     nlohmann::json metric;
-    metric["name"] = "eq.combat.damage";
+    metric["name"] = everquest_semconv::kEverquestCombatDamageMetric;
     metric["unit"] = "{hitpoint}";
     metric["sum"] = {{"dataPoints", data_points}, {"aggregationTemporality", 2}, {"isMonotonic", true}};
     metrics.push_back(metric);
@@ -541,9 +543,9 @@ std::string OtlpExporter::build_metrics_payload() {
     std::lock_guard<std::mutex> lock(metrics_mutex);
     for (const auto &[key, total] : combat_heal) {
       heal_points.push_back({{"attributes",
-                              {string_attr("eq.combat.source", std::get<0>(key)),
-                               string_attr("eq.combat.direction", std::get<1>(key)),
-                               string_attr("eq.zone.name", std::get<2>(key))}},
+                              {string_attr(everquest_semconv::kEverquestCombatSource, std::get<0>(key)),
+                               string_attr(everquest_semconv::kEverquestCombatDirection, std::get<1>(key)),
+                               string_attr(everquest_semconv::kEverquestZoneName, std::get<2>(key))}},
                              {"startTimeUnixNano", start},
                              {"timeUnixNano", now},
                              {"asInt", std::to_string(total)}});
@@ -551,7 +553,7 @@ std::string OtlpExporter::build_metrics_payload() {
   }
   if (!heal_points.empty()) {
     nlohmann::json metric;
-    metric["name"] = "eq.combat.heal";
+    metric["name"] = everquest_semconv::kEverquestCombatHealMetric;
     metric["unit"] = "{hitpoint}";
     metric["sum"] = {{"dataPoints", heal_points}, {"aggregationTemporality", 2}, {"isMonotonic", true}};
     metrics.push_back(metric);
@@ -564,8 +566,8 @@ std::string OtlpExporter::build_metrics_payload() {
       std::lock_guard<std::mutex> lock(snapshot_mutex);
       s = snapshot;
     }
-    if (s.have_attack) metrics.push_back(gauge_metric("eq.character.attack", "1", now, s.attack, s.zone));
-    if (s.have_haste) metrics.push_back(gauge_metric("eq.character.haste", "%", now, s.haste, s.zone));
+    if (s.have_attack) metrics.push_back(gauge_metric(everquest_semconv::kEverquestCharacterAttackMetric, "1", now, s.attack, s.zone));
+    if (s.have_haste) metrics.push_back(gauge_metric(everquest_semconv::kEverquestCharacterHasteMetric, "%", now, s.haste, s.zone));
   }
 
   if (metrics.empty()) return "";
@@ -607,8 +609,8 @@ void OtlpExporter::end_fight(const std::string &key, const char *outcome, unsign
   sp.name = "fight " + f.display;
   sp.start_ns = f.start_ns;
   sp.end_ns = end_ns ? end_ns : f.last_ns;
-  sp.str_attrs = {{"eq.combat.target", key}, {"eq.zone.name", zone_active}, {"eq.fight.outcome", outcome}};
-  sp.int_attrs = {{"eq.fight.damage.dealt", f.dmg_out}, {"eq.fight.damage.taken", f.dmg_in}};
+  sp.str_attrs = {{everquest_semconv::kEverquestCombatTarget, key}, {everquest_semconv::kEverquestZoneName, zone_active}, {"everquest.fight.outcome", outcome}};
+  sp.int_attrs = {{"everquest.fight.damage.dealt", f.dmg_out}, {"everquest.fight.damage.taken", f.dmg_in}};
   {
     std::lock_guard<std::mutex> lock(spans_mutex);
     completed_spans.push_back(std::move(sp));
@@ -633,7 +635,7 @@ void OtlpExporter::fight_tick() {
       sp.name = "zone " + zone_active;
       sp.start_ns = zone_start_ns;
       sp.end_ns = now;
-      sp.str_attrs = {{"eq.zone.name", zone_active}};
+      sp.str_attrs = {{everquest_semconv::kEverquestZoneName, zone_active}};
       std::lock_guard<std::mutex> lock(spans_mutex);
       completed_spans.push_back(std::move(sp));
     }

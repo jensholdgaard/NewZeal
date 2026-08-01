@@ -103,6 +103,7 @@
     <ClInclude Include="named_pipe.h" />
     <ClInclude Include="nameplate.h" />
     <ClInclude Include="npc_give.h" />
+    <ClInclude Include="everquest_semconv.h" />
     <ClInclude Include="otlp_exporter.h" />
     <ClInclude Include="page10_binds.h" />
     <ClInclude Include="patches.h" />
