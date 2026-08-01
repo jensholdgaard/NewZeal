@@ -67,6 +67,16 @@ std::string current_zone_name() {
   return Zeal::Game::get_full_zone_name(self->ZoneId);
 }
 
+// The group's leader names the group ("" when ungrouped). Game thread only.
+//
+// Leader rather than a roster hash: a roster identifier changes the moment anyone joins or leaves,
+// which splits a timeseries mid-fight, whereas leadership rarely changes hands.
+std::string current_group_leader() {
+  const Zeal::GameStructures::GroupInfo *gi = Zeal::Game::GroupInfo;
+  if (!Zeal::Game::is_in_game() || !gi || !gi->is_in_group()) return "";
+  return gi->LeaderName;
+}
+
 const char *class_name(int class_id) {
   switch (class_id) {
     case 1: return "Warrior";
@@ -348,6 +358,20 @@ void OtlpExporter::sample_game_state() {
       s.have_attack = true;
       s.attack = atoll(offense.c_str());
     }
+    // Group roster. GroupInfo.Names is a fixed array gated by IsValidList, and does not include the
+    // local character, so add it explicitly - otherwise the reporting player is missing from their
+    // own group.
+    const Zeal::GameStructures::GroupInfo *gi = Zeal::Game::GroupInfo;
+    if (gi && gi->is_in_group()) {
+      s.group_leader = gi->LeaderName;
+      s.group_members.push_back(s.name);
+      for (int i = 0; i < GAME_NUM_GROUP_MEMBERS; ++i) {  // 5 slots: the group minus yourself
+        if (!gi->IsValidList[i] || gi->Names[i][0] == 0) continue;
+        if (s.name == gi->Names[i]) continue;  // belt and braces against a duplicate self entry
+        s.group_members.push_back(gi->Names[i]);
+      }
+    }
+
     Zeal::GameStructures::Entity *self = Zeal::Game::get_self();
     if (self) {
       // ModifyAttackSpeed applies total effective haste (worn + spell + overhaste) to a reference
@@ -437,9 +461,10 @@ bool OtlpExporter::in_combat_scope(const std::string &source) const {
 void OtlpExporter::record_combat_damage(const std::string &source, const std::string &source_type,
                                         const std::string &direction, const std::string &type,
                                         const std::string &target, long long amount) {
-  const std::string zone = current_zone_name();  // where the hit happened (game thread)
+  const std::string zone = current_zone_name();     // where the hit happened (game thread)
+  const std::string group = current_group_leader();  // which group it was dealt in
   std::lock_guard<std::mutex> lock(metrics_mutex);
-  CombatTotal &entry = combat_damage[{source, source_type, direction, type, zone, target}];
+  CombatTotal &entry = combat_damage[{source, source_type, direction, type, zone, target, group}];
   entry.total += amount;
   entry.last_ms = GetTickCount64();
 }
@@ -536,13 +561,18 @@ std::string OtlpExporter::build_metrics_payload() {
         continue;
       }
       const auto &key = it->first;
-      data_points.push_back({{"attributes",
-                              {string_attr(everquest_semconv::kEverquestCombatSource, std::get<0>(key)),
-                               string_attr(everquest_semconv::kEverquestCombatSourceType, std::get<1>(key)),
-                               string_attr(everquest_semconv::kEverquestCombatDirection, std::get<2>(key)),
-                               string_attr(everquest_semconv::kEverquestCombatDamageType, std::get<3>(key)),
-                               string_attr(everquest_semconv::kEverquestZoneName, std::get<4>(key)),
-                               string_attr(everquest_semconv::kEverquestCombatTarget, std::get<5>(key))}},
+      nlohmann::json attrs = nlohmann::json::array(
+          {string_attr(everquest_semconv::kEverquestCombatSource, std::get<0>(key)),
+           string_attr(everquest_semconv::kEverquestCombatSourceType, std::get<1>(key)),
+           string_attr(everquest_semconv::kEverquestCombatDirection, std::get<2>(key)),
+           string_attr(everquest_semconv::kEverquestCombatDamageType, std::get<3>(key)),
+           string_attr(everquest_semconv::kEverquestZoneName, std::get<4>(key)),
+           string_attr(everquest_semconv::kEverquestCombatTarget, std::get<5>(key))});
+      // Omitted rather than sent empty when ungrouped: an absent attribute is a missing label in
+      // Prometheus, which keeps solo play out of every group-scoped query.
+      if (!std::get<6>(key).empty())
+        attrs.push_back(string_attr(everquest_semconv::kEverquestGroupLeader, std::get<6>(key)));
+      data_points.push_back({{"attributes", attrs},
                              {"startTimeUnixNano", start},
                              {"timeUnixNano", now},
                              {"asInt", std::to_string(it->second.total)}});
@@ -588,6 +618,31 @@ std::string OtlpExporter::build_metrics_payload() {
     }
     if (s.have_attack) metrics.push_back(gauge_metric(everquest_semconv::kEverquestCharacterAttackMetric, "1", now, s.attack, s.zone));
     if (s.have_haste) metrics.push_back(gauge_metric(everquest_semconv::kEverquestCharacterHasteMetric, "%", now, s.haste, s.zone));
+
+    // Group roster: one point of value 1 per member, so a dashboard can show who is *in* the group
+    // rather than only the subset of it that runs Zeal.
+    //
+    // A non-monotonic Sum, not a Gauge: per the OTLP/Prometheus compatibility spec an info-style
+    // metric "MUST be converted to an OTLP Non-Monotonic Sum ... because the value of 1 is intended
+    // to be viewed as a count, which should be summed together when aggregating away labels" - so
+    // sum() over the member attribute yields the group size.
+    if (!s.group_members.empty()) {
+      nlohmann::json member_points = nlohmann::json::array();
+      for (const std::string &member : s.group_members) {
+        member_points.push_back(
+            {{"attributes", nlohmann::json::array({string_attr(everquest_semconv::kEverquestGroupLeader, s.group_leader),
+                                                   string_attr(everquest_semconv::kEverquestCharacterName, member),
+                                                   string_attr(everquest_semconv::kEverquestZoneName, s.zone)})},
+             {"startTimeUnixNano", start},
+             {"timeUnixNano", now},
+             {"asInt", "1"}});
+      }
+      nlohmann::json metric;
+      metric["name"] = everquest_semconv::kEverquestGroupMemberMetric;
+      metric["unit"] = "{member}";
+      metric["sum"] = {{"dataPoints", member_points}, {"aggregationTemporality", 2}, {"isMonotonic", false}};
+      metrics.push_back(metric);
+    }
   }
 
   if (metrics.empty()) return "";

@@ -78,6 +78,12 @@
                         "value": {
                           "stringValue": "a_temple_guard00"
                         }
+                      },
+                      {
+                        "key": "everquest.group.leader",
+                        "value": {
+                          "stringValue": "Controels"
+                        }
                       }
                     ],
                     "startTimeUnixNano": "1785540000000000000",
@@ -120,6 +126,12 @@
                         "key": "everquest.combat.target",
                         "value": {
                           "stringValue": "a_temple_guard00"
+                        }
+                      },
+                      {
+                        "key": "everquest.group.leader",
+                        "value": {
+                          "stringValue": "Controels"
                         }
                       }
                     ],
@@ -205,6 +217,66 @@
                     ]
                   }
                 ]
+              }
+            },
+            {
+              "name": "everquest.group.member",
+              "unit": "{member}",
+              "sum": {
+                "dataPoints": [
+                  {
+                    "attributes": [
+                      {
+                        "key": "everquest.group.leader",
+                        "value": {
+                          "stringValue": "Controels"
+                        }
+                      },
+                      {
+                        "key": "everquest.character.name",
+                        "value": {
+                          "stringValue": "Controels"
+                        }
+                      },
+                      {
+                        "key": "everquest.zone.name",
+                        "value": {
+                          "stringValue": "Dawnshroud Peaks"
+                        }
+                      }
+                    ],
+                    "startTimeUnixNano": "1785540000000000000",
+                    "timeUnixNano": "1785540000000000000",
+                    "asInt": "1"
+                  },
+                  {
+                    "attributes": [
+                      {
+                        "key": "everquest.group.leader",
+                        "value": {
+                          "stringValue": "Controels"
+                        }
+                      },
+                      {
+                        "key": "everquest.character.name",
+                        "value": {
+                          "stringValue": "Zigzap"
+                        }
+                      },
+                      {
+                        "key": "everquest.zone.name",
+                        "value": {
+                          "stringValue": "Dawnshroud Peaks"
+                        }
+                      }
+                    ],
+                    "startTimeUnixNano": "1785540000000000000",
+                    "timeUnixNano": "1785540000000000000",
+                    "asInt": "1"
+                  }
+                ],
+                "aggregationTemporality": 2,
+                "isMonotonic": false
               }
             }
           ]

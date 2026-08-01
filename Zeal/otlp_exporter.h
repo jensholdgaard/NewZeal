@@ -55,6 +55,11 @@ class OtlpExporter {
     long long attack = 0;
     bool have_haste = false;
     long long haste = 0;
+    // The group's leader names the group; empty when ungrouped. Members includes the local
+    // character, and names people who are not running Zeal at all - which is the point: without it
+    // a group only ever appears as the subset of it that reports telemetry.
+    std::string group_leader;
+    std::vector<std::string> group_members;
   };
 
   static constexpr int kMinFlushMs = 100;  // Floor on the flush interval; metrics are periodic snapshots.
@@ -127,8 +132,11 @@ class OtlpExporter {
   };
 
   std::mutex metrics_mutex;
-  // {source, source_type, direction, type, zone, target} -> running total.
-  std::map<std::tuple<std::string, std::string, std::string, std::string, std::string, std::string>, CombatTotal>
+  // {source, source_type, direction, type, zone, target, group_leader} -> running total.
+  // The group is part of the key rather than stamped on at export time so damage stays attributed to
+  // the group it was dealt in, even if the player regroups before the next flush.
+  std::map<std::tuple<std::string, std::string, std::string, std::string, std::string, std::string, std::string>,
+           CombatTotal>
       combat_damage;
   // {source, direction(outgoing=done, incoming=received), zone} -> total hitpoints.
   std::map<std::tuple<std::string, std::string, std::string>, long long> combat_heal;

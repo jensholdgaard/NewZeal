@@ -41,6 +41,8 @@ inline constexpr const char *kEverquestFightDamageTaken = "everquest.fight.damag
 
 inline constexpr const char *kEverquestFightOutcome = "everquest.fight.outcome";
 
+inline constexpr const char *kEverquestGroupLeader = "everquest.group.leader";
+
 inline constexpr const char *kEverquestSpellName = "everquest.spell.name";
 
 inline constexpr const char *kEverquestZoneId = "everquest.zone.id";
@@ -57,6 +59,8 @@ inline constexpr const char *kEverquestCharacterHasteMetric = "everquest.charact
 inline constexpr const char *kEverquestCombatDamageMetric = "everquest.combat.damage";
 
 inline constexpr const char *kEverquestCombatHealMetric = "everquest.combat.heal";
+
+inline constexpr const char *kEverquestGroupMemberMetric = "everquest.group.member";
 
 
 }  // namespace everquest_semconv
