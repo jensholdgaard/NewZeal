@@ -190,6 +190,7 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
     // DoT ticks and heal amounts never fire the hit event and are only messaged to the involved
     // client, so text is the correct (and self-reporting, non-duplicating) channel for them.
     parse_dot_or_heal(data);
+    parse_lockout(data);
     handle_slain_line(data);
   });
 
@@ -636,6 +637,48 @@ static nlohmann::json gauge_metric(const char *name, const char *unit, const std
   return metric;
 }
 
+// Raid lockouts, e.g. "You have incurred a lockout for Prince Selrach Di`zok that expires in 18
+// Hours." Unlike damage shields there is no authority to check this against: the text is not in the
+// client's string table and not in the EQMacEmu source, so it is Quarm's own wording, known only
+// from observation. Parsed loosely on that account - any unit, singular or plural - and echoed by
+// `/otlp debug` so a wording we do not handle shows up as silence next to a visible chat line.
+//
+// The expiry is recorded as an absolute instant, not a remaining duration: a countdown computed
+// from "18 hours" would be wrong the moment it was exported, whereas a deadline stays correct for
+// as long as the value survives, including after the player logs off.
+void OtlpExporter::parse_lockout(const std::string &line) {
+  static const char kFor[] = " lockout for ";
+  static const char kExpires[] = " that expires in ";
+  const size_t f = line.find(kFor);
+  if (f == std::string::npos) return;
+  const size_t e = line.find(kExpires, f);
+  if (e == std::string::npos) return;
+
+  const std::string target = line.substr(f + sizeof(kFor) - 1, e - (f + sizeof(kFor) - 1));
+  const size_t num_at = e + sizeof(kExpires) - 1;
+  const long long amount = read_number(line, num_at);
+  if (target.empty() || amount <= 0) return;
+
+  // Unit follows the number; compare case-insensitively on the first letter (Hour/Hours, Minute/s,
+  // Day/s), which is enough to disambiguate and survives plural or capitalisation changes.
+  size_t unit_at = num_at;
+  while (unit_at < line.size() && isdigit(static_cast<unsigned char>(line[unit_at]))) unit_at++;
+  while (unit_at < line.size() && line[unit_at] == ' ') unit_at++;
+  const char unit = (unit_at < line.size()) ? static_cast<char>(tolower(static_cast<unsigned char>(line[unit_at]))) : 'h';
+  long long seconds = amount * 3600;  // hours by default: what the server has been seen to send
+  if (unit == 'm') seconds = amount * 60;
+  else if (unit == 'd') seconds = amount * 86400;
+
+  const long long expiry = static_cast<long long>(now_unix_nano() / 1000000000ULL) + seconds;
+  {
+    std::lock_guard<std::mutex> lock(metrics_mutex);
+    lockouts[target] = expiry;
+  }
+  if (debug_hits.load())
+    Zeal::Game::print_chat("[otlp] lockout %s expires in %lld %c-units (at unix %lld)", target.c_str(), amount, unit,
+                           expiry);
+}
+
 std::string OtlpExporter::build_metrics_payload() {
   const std::string now = std::to_string(now_unix_nano());
   const std::string start = std::to_string(start_time_unix_nano);
@@ -737,6 +780,34 @@ std::string OtlpExporter::build_metrics_payload() {
       metric["name"] = everquest_semconv::kEverquestGroupMemberMetric;
       metric["unit"] = "{member}";
       metric["sum"] = {{"dataPoints", member_points}, {"aggregationTemporality", 2}, {"isMonotonic", false}};
+      metrics.push_back(metric);
+    }
+  }
+
+  // Raid lockouts: value is the unix second the lockout expires, so a dashboard subtracts now() to
+  // count down and stays correct between exports (and after the player logs off).
+  {
+    const long long now_s = static_cast<long long>(now_unix_nano() / 1000000000ULL);
+    nlohmann::json lockout_points = nlohmann::json::array();
+    {
+      std::lock_guard<std::mutex> lock(metrics_mutex);
+      for (auto it = lockouts.begin(); it != lockouts.end();) {
+        if (it->second <= now_s) {
+          it = lockouts.erase(it);  // expired: stop exporting it
+          continue;
+        }
+        lockout_points.push_back(
+            {{"attributes", nlohmann::json::array({string_attr(everquest_semconv::kEverquestRaidTarget, it->first)})},
+             {"timeUnixNano", now},
+             {"asInt", std::to_string(it->second)}});
+        ++it;
+      }
+    }
+    if (!lockout_points.empty()) {
+      nlohmann::json metric;
+      metric["name"] = everquest_semconv::kEverquestRaidLockoutExpiryMetric;
+      metric["unit"] = "s";
+      metric["gauge"] = {{"dataPoints", lockout_points}};
       metrics.push_back(metric);
     }
   }

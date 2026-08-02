@@ -284,6 +284,26 @@
                 "aggregationTemporality": 2,
                 "isMonotonic": false
               }
+            },
+            {
+              "name": "everquest.raid.lockout.expiry",
+              "unit": "s",
+              "gauge": {
+                "dataPoints": [
+                  {
+                    "attributes": [
+                      {
+                        "key": "everquest.raid.target",
+                        "value": {
+                          "stringValue": "Prince Selrach Di`zok"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1785540000000000000",
+                    "asInt": "1785700000"
+                  }
+                ]
+              }
             }
           ]
         }

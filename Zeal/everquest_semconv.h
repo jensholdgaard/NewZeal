@@ -43,6 +43,8 @@ inline constexpr const char *kEverquestFightOutcome = "everquest.fight.outcome";
 
 inline constexpr const char *kEverquestGroupLeader = "everquest.group.leader";
 
+inline constexpr const char *kEverquestRaidTarget = "everquest.raid.target";
+
 inline constexpr const char *kEverquestSpellName = "everquest.spell.name";
 
 inline constexpr const char *kEverquestZoneId = "everquest.zone.id";
@@ -61,6 +63,8 @@ inline constexpr const char *kEverquestCombatDamageMetric = "everquest.combat.da
 inline constexpr const char *kEverquestCombatHealMetric = "everquest.combat.heal";
 
 inline constexpr const char *kEverquestGroupMemberMetric = "everquest.group.member";
+
+inline constexpr const char *kEverquestRaidLockoutExpiryMetric = "everquest.raid.lockout.expiry";
 
 
 }  // namespace everquest_semconv

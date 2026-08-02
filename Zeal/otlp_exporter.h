@@ -81,6 +81,8 @@ class OtlpExporter {
                             const std::string &type, const std::string &target, long long amount);
   // Parses caster-side DoT ticks and heal messages from a chat line (they have no hit event).
   void parse_dot_or_heal(const std::string &line);
+  // Parses a raid lockout notice ("... lockout for <target> that expires in <n> Hours.").
+  void parse_lockout(const std::string &line);
   // Accumulates the `eq.combat.heal` counter, keyed by {source, direction, zone}.
   void record_heal(const std::string &source, const std::string &direction, long long amount);
   // True if `source` should be recorded given the current scope setting (self+pet vs all attackers).
@@ -153,6 +155,11 @@ class OtlpExporter {
   // checked against what the server actually sent rather than against what we believe it sends.
   // Deliberately not persisted - it is spammy, and should not survive a session by accident.
   std::atomic<bool> debug_hits{false};
+
+  // Raid lockouts: target -> unix seconds at which the lockout expires. The expiry is stored as an
+  // absolute instant rather than a remaining duration, so a dashboard can keep counting down from
+  // the last reported value even after the player logs off and the series goes stale.
+  std::map<std::string, long long> lockouts;
 
   // Damage shield pairing state (game thread only, via the chat callback): the amount from the most
   // recent "was hit by non-melee" message, claimed by a shield flavour line naming the same target.
