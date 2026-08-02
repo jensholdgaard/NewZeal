@@ -223,7 +223,13 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                              static_cast<unsigned int>(type), static_cast<int>(spell_id), static_cast<int>(damage),
                              dtype, direction);
     }
-    if (in_combat_scope(src)) record_combat_damage(src, src_type, direction, dtype, tgt, damage);
+    // Damage *taken* is always recorded, whatever the scope. The scope filter exists to stop several
+    // clients reporting the same attacker, but only the victim is told about damage landing on it, so
+    // there is nobody to duplicate - and filtering on the attacker meant a tank running the default
+    // scope=self dropped its own damage taken, which is precisely the number a raid wants next to
+    // healing received.
+    const bool incoming = (direction[0] == 'i');
+    if (incoming || in_combat_scope(src)) record_combat_damage(src, src_type, direction, dtype, tgt, damage);
     // Fight spans: track encounters with NPCs (the mob is the target when we hit it, the source
     // when it hits us).
     const bool outgoing = (direction[0] == 'o');
