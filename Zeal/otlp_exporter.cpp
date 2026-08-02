@@ -423,7 +423,12 @@ void OtlpExporter::sample_game_state() {
 nlohmann::json OtlpExporter::build_resource_attributes() const {
   nlohmann::json attrs = nlohmann::json::array();
   attrs.push_back(string_attr("service.name", "everquest"));
-  attrs.push_back(string_attr("service.version", ZEAL_VERSION));
+  // ZEAL_VERSION alone cannot distinguish two builds of the same release, and every build of this
+  // branch reports 1.4.5 - so "which build is that member running?" was unanswerable, which is
+  // exactly the question that comes up when a feature appears to be missing for one person. The
+  // short git hash the build workflow compiles in (or "UNOFFICIAL" for a local build) is appended as
+  // semver build metadata, which is what that field is for.
+  attrs.push_back(string_attr("service.version", ZEAL_VERSION "+" ZEAL_BUILD_VERSION));
   attrs.push_back(string_attr("telemetry.sdk.name", "zeal"));
 
   Snapshot s;
