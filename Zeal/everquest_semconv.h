@@ -64,6 +64,8 @@ inline constexpr const char *kEverquestCombatHealMetric = "everquest.combat.heal
 
 inline constexpr const char *kEverquestGroupMemberMetric = "everquest.group.member";
 
+inline constexpr const char *kEverquestRaidKillTimestampMetric = "everquest.raid.kill.timestamp";
+
 inline constexpr const char *kEverquestRaidLockoutExpiryMetric = "everquest.raid.lockout.expiry";
 
 

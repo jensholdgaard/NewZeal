@@ -160,6 +160,10 @@ class OtlpExporter {
   // absolute instant rather than a remaining duration, so a dashboard can keep counting down from
   // the last reported value even after the player logs off and the series goes stale.
   std::map<std::string, long long> lockouts;
+  // target -> unix seconds the target died. The server sends the lockout notice from
+  // NPC::CreateCorpse, so the moment it arrives is the time of death - which is the number guilds
+  // currently ask people to type into Discord by hand.
+  std::map<std::string, long long> raid_kills;
 
   // Damage shield pairing state (game thread only, via the chat callback): the amount from the most
   // recent "was hit by non-melee" message, claimed by a shield flavour line naming the same target.

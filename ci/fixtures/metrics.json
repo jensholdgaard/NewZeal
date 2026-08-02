@@ -304,6 +304,26 @@
                   }
                 ]
               }
+            },
+            {
+              "name": "everquest.raid.kill.timestamp",
+              "unit": "s",
+              "gauge": {
+                "dataPoints": [
+                  {
+                    "attributes": [
+                      {
+                        "key": "everquest.raid.target",
+                        "value": {
+                          "stringValue": "Prince Selrach Di`zok"
+                        }
+                      }
+                    ],
+                    "timeUnixNano": "1785540000000000000",
+                    "asInt": "1785635200"
+                  }
+                ]
+              }
             }
           ]
         }

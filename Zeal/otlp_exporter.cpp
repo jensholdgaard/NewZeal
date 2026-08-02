@@ -684,10 +684,14 @@ void OtlpExporter::parse_lockout(const std::string &line) {
   }
   if (seconds <= 0) return;
 
-  const long long expiry = static_cast<long long>(now_unix_nano() / 1000000000ULL) + seconds;
+  const long long now_s = static_cast<long long>(now_unix_nano() / 1000000000ULL);
+  const long long expiry = now_s + seconds;
   {
     std::lock_guard<std::mutex> lock(metrics_mutex);
     lockouts[target] = expiry;
+    // The server emits this notice from NPC::CreateCorpse, i.e. at the kill, so this is the time of
+    // death rather than the time of looting.
+    raid_kills[target] = now_s;
   }
   if (debug_hits.load())
     Zeal::Game::print_chat("[otlp] lockout %s in %lld s (expires at unix %lld)", target.c_str(), seconds, expiry);
@@ -822,6 +826,31 @@ std::string OtlpExporter::build_metrics_payload() {
       metric["name"] = everquest_semconv::kEverquestRaidLockoutExpiryMetric;
       metric["unit"] = "s";
       metric["gauge"] = {{"dataPoints", lockout_points}};
+      metrics.push_back(metric);
+    }
+
+    // Time of death, kept for a week rather than until the lockout expires: the lockout governs
+    // looting, but a spawn window outlives it, and the TOD is what the next raid is planned around.
+    nlohmann::json kill_points = nlohmann::json::array();
+    {
+      std::lock_guard<std::mutex> lock(metrics_mutex);
+      for (auto it = raid_kills.begin(); it != raid_kills.end();) {
+        if (now_s - it->second > 7 * 24 * 3600) {
+          it = raid_kills.erase(it);
+          continue;
+        }
+        kill_points.push_back(
+            {{"attributes", nlohmann::json::array({string_attr(everquest_semconv::kEverquestRaidTarget, it->first)})},
+             {"timeUnixNano", now},
+             {"asInt", std::to_string(it->second)}});
+        ++it;
+      }
+    }
+    if (!kill_points.empty()) {
+      nlohmann::json metric;
+      metric["name"] = everquest_semconv::kEverquestRaidKillTimestampMetric;
+      metric["unit"] = "s";
+      metric["gauge"] = {{"dataPoints", kill_points}};
       metrics.push_back(metric);
     }
   }
