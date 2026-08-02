@@ -104,6 +104,7 @@
     <ClInclude Include="nameplate.h" />
     <ClInclude Include="npc_give.h" />
     <ClInclude Include="everquest_semconv.h" />
+    <ClInclude Include="otlp_client.h" />
     <ClInclude Include="otlp_exporter.h" />
     <ClInclude Include="page10_binds.h" />
     <ClInclude Include="patches.h" />
@@ -192,6 +193,7 @@
     <ClCompile Include="named_pipe.cpp" />
     <ClCompile Include="nameplate.cpp" />
     <ClCompile Include="npc_give.cpp" />
+    <ClCompile Include="otlp_client.cpp" />
     <ClCompile Include="otlp_exporter.cpp" />
     <ClCompile Include="page10_binds.cpp" />
     <ClCompile Include="patches.cpp" />

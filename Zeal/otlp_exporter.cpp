@@ -180,7 +180,6 @@ bool is_damage_shield_type(unsigned short type) {
 
 OtlpExporter::OtlpExporter(ZealService *zeal) {
   start_time_unix_nano = now_unix_nano();
-  worker = std::thread([this]() { worker_loop(); });
 
   // Emit every print-to-chat line as a log record and mine it for combat damage. This is the live
   // source (the pipe uses the same callback); registering our own keeps OTLP independent of whether
@@ -244,17 +243,20 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                            [this](std::vector<std::string> &args) {
                              if (args.size() == 2 && Zeal::String::compare_insensitive(args[1], "on")) {
                                setting_enabled.set(true);
+                               client->set_enabled(true);
                                Zeal::Game::print_chat("OTLP export enabled -> %s/v1/logs",
                                                       setting_endpoint.get().c_str());
                                return true;
                              }
                              if (args.size() == 2 && Zeal::String::compare_insensitive(args[1], "off")) {
                                setting_enabled.set(false);
+                               client->set_enabled(false);
                                Zeal::Game::print_chat("OTLP export disabled.");
                                return true;
                              }
                              if (args.size() == 3 && Zeal::String::compare_insensitive(args[1], "endpoint")) {
                                setting_endpoint.set(args[2]);
+                               client->set_endpoint(args[2]);
                                Zeal::Game::print_chat("OTLP endpoint set to %s", args[2].c_str());
                                return true;
                              }
@@ -264,8 +266,10 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                                  Zeal::Game::print_chat("Usage: /otlp flush <milliseconds>");
                                  return true;
                                }
-                               if (ms < kMinFlushMs) ms = kMinFlushMs;  // Clamp: metrics are periodic; 0 would just hammer.
+                               if (ms < OtlpClient::kMinFlushMs)
+                                 ms = OtlpClient::kMinFlushMs;  // Clamp: metrics are periodic; 0 would just hammer.
                                setting_flush_ms.set(ms);
+                               client->set_flush_ms(ms);
                                Zeal::Game::print_chat("OTLP flush interval set to %ims", ms);
                                return true;
                              }
@@ -293,27 +297,28 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                                                     setting_enabled.get() ? "enabled" : "disabled",
                                                     setting_endpoint.get().c_str(), setting_flush_ms.get(),
                                                     setting_combat_scope.get().c_str());
-                             Zeal::Game::print_chat("  sent: %llu log batches-worth, %llu metric posts, %llu failed",
-                                                    logs_posted.load(), metrics_posted.load(), failed_posts.load());
-                             Zeal::Game::print_chat("  last HTTP status: %i", last_http_status.load());
+                             Zeal::Game::print_chat("  sent: %llu log lines, %llu payloads, %llu failed",
+                                                    logs_posted.load(), client->posted(), client->failed());
+                             Zeal::Game::print_chat("  last HTTP status: %i", client->last_status());
                              {
-                               std::lock_guard<std::mutex> lock(last_error_mutex);
-                               if (!last_error.empty())
-                                 Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "  last error: %s",
-                                                        last_error.c_str());
+                               const std::string err = client->last_error();
+                               if (!err.empty())
+                                 Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "  last error: %s", err.c_str());
                              }
                              Zeal::Game::print_chat("Usage: /otlp on|off|status|endpoint <url>|flush <ms>|scope self|all");
                              return true;
                            });
+
+  // Constructed last: the worker calls collect() as soon as it starts, so every piece of state it
+  // reads must already exist.
+  client = std::make_unique<OtlpClient>([this]() { return collect(); });
+  client->set_endpoint(setting_endpoint.get());
+  client->set_flush_ms(setting_flush_ms.get());
+  client->set_enabled(setting_enabled.get());
 }
 
 OtlpExporter::~OtlpExporter() {
-  {
-    std::lock_guard<std::mutex> lock(queue_mutex);
-    end_thread = true;
-  }
-  queue_cv.notify_all();
-  if (worker.joinable()) worker.join();
+  client.reset();  // stops and joins the worker before any state it collects from goes away
 }
 
 void OtlpExporter::log(const std::string &body, int color_index) {
@@ -329,51 +334,29 @@ void OtlpExporter::log(const std::string &body, int color_index) {
     std::lock_guard<std::mutex> lock(queue_mutex);
     queue.push_back(std::move(record));
   }
-  queue_cv.notify_one();
 }
 
-void OtlpExporter::worker_loop() {
-  while (true) {
-    std::vector<LogRecord> batch;
-    {
-      std::unique_lock<std::mutex> lock(queue_mutex);
-      const int configured = setting_flush_ms.get();
-      const int interval = configured > 0 ? (configured < kMinFlushMs ? kMinFlushMs : configured) : 2000;
-      queue_cv.wait_for(lock, std::chrono::milliseconds(interval),
-                        [this]() { return end_thread || !queue.empty(); });
-      if (end_thread && queue.empty()) return;
+std::vector<OtlpClient::Payload> OtlpExporter::collect() {
+  std::vector<OtlpClient::Payload> payloads;
 
-      const int max_batch = setting_max_batch.get() > 0 ? setting_max_batch.get() : 512;
-      while (!queue.empty() && static_cast<int>(batch.size()) < max_batch) {
-        batch.push_back(std::move(queue.front()));
-        queue.pop_front();
-      }
-    }
-
-    if (!setting_enabled.get()) continue;
-
-    try {
-      if (!batch.empty()) {
-        if (post_json("/v1/logs", build_logs_payload(batch)))
-          logs_posted += batch.size();
-        else
-          failed_posts++;
-      }
-      // Metrics use cumulative temporality, so emit the current snapshot every flush even when no
-      // new log lines arrived this cycle.
-      std::string metrics = build_metrics_payload();
-      if (!metrics.empty()) {
-        if (post_json("/v1/metrics", metrics))
-          metrics_posted++;
-        else
-          failed_posts++;
-      }
-      std::string traces = build_traces_payload();
-      if (!traces.empty() && !post_json("/v1/traces", traces)) failed_posts++;
-    } catch (const std::exception &) {
-      // Never let telemetry take down the game; drop this cycle on failure.
+  std::vector<LogRecord> batch;
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex);
+    const int max_batch = setting_max_batch.get() > 0 ? setting_max_batch.get() : 512;
+    while (!queue.empty() && static_cast<int>(batch.size()) < max_batch) {
+      batch.push_back(std::move(queue.front()));
+      queue.pop_front();
     }
   }
+  if (!batch.empty()) {
+    payloads.emplace_back("/v1/logs", build_logs_payload(batch));
+    logs_posted += batch.size();
+  }
+  // Metrics use cumulative temporality, so emit the current snapshot every flush even when no new
+  // log lines arrived this cycle.
+  payloads.emplace_back("/v1/metrics", build_metrics_payload());
+  payloads.emplace_back("/v1/traces", build_traces_payload());
+  return payloads;
 }
 
 void OtlpExporter::sample_game_state() {
@@ -905,59 +888,3 @@ std::string OtlpExporter::build_traces_payload() {
   return payload.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
-bool OtlpExporter::post_json(const std::string &path, const std::string &json_body) {
-  std::string url = setting_endpoint.get() + path;
-  std::wstring wurl(url.begin(), url.end());
-
-  URL_COMPONENTS uc = {0};
-  uc.dwStructSize = sizeof(uc);
-  wchar_t host[256] = {0};
-  wchar_t url_path[1024] = {0};
-  uc.lpszHostName = host;
-  uc.dwHostNameLength = _countof(host);
-  uc.lpszUrlPath = url_path;
-  uc.dwUrlPathLength = _countof(url_path);
-  if (!WinHttpCrackUrl(wurl.c_str(), 0, 0, &uc)) return false;
-
-  bool ok = false;
-  HINTERNET session = WinHttpOpen(L"Zeal-OTLP/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME,
-                                  WINHTTP_NO_PROXY_BYPASS, 0);
-  if (session) {
-    // Bound every phase so a slow/unreachable endpoint can't hang the sender thread (and thus the
-    // join() on shutdown). Values in ms: resolve, connect, send, receive.
-    WinHttpSetTimeouts(session, 2000, 2000, 2000, 3000);
-    HINTERNET connect = WinHttpConnect(session, host, uc.nPort, 0);
-    if (connect) {
-      DWORD flags = (uc.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
-      HINTERNET request = WinHttpOpenRequest(connect, L"POST", url_path, nullptr, WINHTTP_NO_REFERER,
-                                             WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
-      if (request) {
-        const wchar_t *headers = L"Content-Type: application/json";
-        if (WinHttpSendRequest(request, headers, -1L, (LPVOID)json_body.data(),
-                               static_cast<DWORD>(json_body.size()), static_cast<DWORD>(json_body.size()), 0) &&
-            WinHttpReceiveResponse(request, nullptr)) {
-          DWORD status = 0, size = sizeof(status);
-          WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX,
-                              &status, &size, WINHTTP_NO_HEADER_INDEX);
-          last_http_status.store(static_cast<int>(status));
-          ok = (status >= 200 && status < 300);
-          if (!ok) {
-            // Keep the server's explanation — it names the exact problem (e.g. a malformed field),
-            // which is otherwise invisible from in-game.
-            std::string body;
-            char buf[512];
-            DWORD read = 0;
-            while (body.size() < 400 && WinHttpReadData(request, buf, sizeof(buf), &read) && read > 0)
-              body.append(buf, read);
-            std::lock_guard<std::mutex> lock(last_error_mutex);
-            last_error = path + " -> " + std::to_string(status) + " " + body.substr(0, 300);
-          }
-        }
-        WinHttpCloseHandle(request);
-      }
-      WinHttpCloseHandle(connect);
-    }
-    WinHttpCloseHandle(session);
-  }
-  return ok;
-}

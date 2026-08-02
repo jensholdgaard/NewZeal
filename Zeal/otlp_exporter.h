@@ -7,21 +7,24 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <memory>
 #include <thread>
 #include <tuple>
 #include <utility>
 #include <vector>
 
 #include "json.hpp"
+#include "otlp_client.h"
 #include "zeal_settings.h"
 
-// OtlpExporter emits telemetry from Zeal directly over OTLP/HTTP using the JSON encoding, so the
-// game client can talk to an OpenTelemetry backend (e.g. Ourios) or Collector without an external
-// pipe-reading sidecar.
+// OtlpExporter is the instrumentation half of the exporter: it hooks the game, decides what a hit,
+// heal, or fight means, and encodes those into OTLP payloads. Everything that touches the network -
+// the worker thread, the flush timer, delivery and send statistics - lives in OtlpClient, which
+// knows nothing about EverQuest.
 //
-// This first iteration implements the logs signal only: game log/chat lines are queued on the game
-// thread (non-blocking) and flushed by a background worker thread that POSTs an OTLP/HTTP JSON
-// payload to <endpoint>/v1/logs. Metrics and traces will follow the same queue+worker pattern.
+// All three signals are emitted: logs (chat lines), metrics (combat, character, group) and traces
+// (zone sessions parenting fight spans). Game-thread callbacks only ever append to state; the
+// worker thread reads it through collect().
 class OtlpExporter {
  public:
   OtlpExporter(class ZealService *zeal);
@@ -62,13 +65,12 @@ class OtlpExporter {
     std::vector<std::string> group_members;
   };
 
-  static constexpr int kMinFlushMs = 100;  // Floor on the flush interval; metrics are periodic snapshots.
-
   // Runs on the game thread (MainLoop callback); refreshes `snapshot`.
   void sample_game_state();
 
-  void worker_loop();
-  bool post_json(const std::string &path, const std::string &json_body);
+  // Called on the worker thread each flush: drains the log queue and snapshots the metric/span
+  // state into ready-to-send payloads.
+  std::vector<OtlpClient::Payload> collect();
   std::string build_logs_payload(const std::vector<LogRecord> &records) const;
   nlohmann::json build_resource_attributes() const;
 
@@ -118,9 +120,11 @@ class OtlpExporter {
 
   std::deque<LogRecord> queue;
   mutable std::mutex queue_mutex;
-  std::condition_variable queue_cv;
-  std::thread worker;
-  bool end_thread = false;
+
+  // Transport: owns the worker thread, the flush timer and delivery. Constructed last so the worker
+  // never observes a half-built exporter, and destroyed first so collect() cannot run during
+  // teardown.
+  std::unique_ptr<OtlpClient> client;
 
   // Fixed start time for cumulative metric streams (set at construction).
   unsigned long long start_time_unix_nano = 0;
@@ -156,13 +160,8 @@ class OtlpExporter {
   long long ds_pending_amount = 0;
   unsigned long long ds_pending_ms = 0;
 
-  // Lightweight send stats surfaced by `/otlp status`.
+  // Log lines delivered, counted here because the client only counts payloads, not records.
   std::atomic<unsigned long long> logs_posted{0};
-  std::atomic<unsigned long long> metrics_posted{0};
-  std::atomic<unsigned long long> failed_posts{0};
-  std::atomic<int> last_http_status{0};
-  std::mutex last_error_mutex;
-  std::string last_error;  // response body / failure reason of the most recent failed post
 
   mutable std::mutex snapshot_mutex;
   Snapshot snapshot;

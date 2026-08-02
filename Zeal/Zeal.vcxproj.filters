@@ -180,6 +180,9 @@
     <ClInclude Include="named_pipe.h">
       <Filter>Header Files\other</Filter>
     </ClInclude>
+    <ClInclude Include="otlp_client.h">
+      <Filter>Header Files\other</Filter>
+    </ClInclude>
     <ClInclude Include="otlp_exporter.h">
       <Filter>Header Files\other</Filter>
     </ClInclude>
@@ -429,6 +432,9 @@
       <Filter>Source Files\ui</Filter>
     </ClCompile>
     <ClCompile Include="named_pipe.cpp">
+      <Filter>Source Files\other</Filter>
+    </ClCompile>
+    <ClCompile Include="otlp_client.cpp">
       <Filter>Source Files\other</Filter>
     </ClCompile>
     <ClCompile Include="otlp_exporter.cpp">
