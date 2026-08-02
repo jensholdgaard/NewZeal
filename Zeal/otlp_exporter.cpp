@@ -637,15 +637,19 @@ static nlohmann::json gauge_metric(const char *name, const char *unit, const std
   return metric;
 }
 
-// Raid lockouts, e.g. "You have incurred a lockout for Prince Selrach Di`zok that expires in 18
-// Hours." Unlike damage shields there is no authority to check this against: the text is not in the
-// client's string table and not in the EQMacEmu source, so it is Quarm's own wording, known only
-// from observation. Parsed loosely on that account - any unit, singular or plural - and echoed by
-// `/otlp debug` so a wording we do not handle shows up as silence next to a visible chat line.
+// Raid lockouts. The server builds this message in zone/corpse.cpp:
+//
+//   "You have incurred a lockout for " + npc->GetCleanName()
+//     + " that expires in " + Strings::SecondsToTime(loot_lockout_timer) + "."
+//
+// SecondsToTime emits a *compound* duration - "18 Hours", but equally "1 Day, 2 Hours, 3 Minutes,
+// and 4 Seconds", singular or plural per unit - so every number/unit pair has to be summed. Reading
+// only the first pair (as this did at first) silently truncates: "17 Hours, 45 Minutes" would
+// become 17 hours and the countdown would finish 45 minutes early.
 //
 // The expiry is recorded as an absolute instant, not a remaining duration: a countdown computed
-// from "18 hours" would be wrong the moment it was exported, whereas a deadline stays correct for
-// as long as the value survives, including after the player logs off.
+// once would be wrong the moment it was exported, whereas a deadline stays correct for as long as
+// the value survives, including after the player logs off.
 void OtlpExporter::parse_lockout(const std::string &line) {
   static const char kFor[] = " lockout for ";
   static const char kExpires[] = " that expires in ";
@@ -655,19 +659,30 @@ void OtlpExporter::parse_lockout(const std::string &line) {
   if (e == std::string::npos) return;
 
   const std::string target = line.substr(f + sizeof(kFor) - 1, e - (f + sizeof(kFor) - 1));
-  const size_t num_at = e + sizeof(kExpires) - 1;
-  const long long amount = read_number(line, num_at);
-  if (target.empty() || amount <= 0) return;
+  if (target.empty()) return;
 
-  // Unit follows the number; compare case-insensitively on the first letter (Hour/Hours, Minute/s,
-  // Day/s), which is enough to disambiguate and survives plural or capitalisation changes.
-  size_t unit_at = num_at;
-  while (unit_at < line.size() && isdigit(static_cast<unsigned char>(line[unit_at]))) unit_at++;
-  while (unit_at < line.size() && line[unit_at] == ' ') unit_at++;
-  const char unit = (unit_at < line.size()) ? static_cast<char>(tolower(static_cast<unsigned char>(line[unit_at]))) : 'h';
-  long long seconds = amount * 3600;  // hours by default: what the server has been seen to send
-  if (unit == 'm') seconds = amount * 60;
-  else if (unit == 'd') seconds = amount * 86400;
+  // Sum every "<n> <unit>" pair in the tail. SecondsToTime returns "Unknown" for a non-positive
+  // duration, which yields no pairs and is skipped.
+  long long seconds = 0;
+  for (size_t i = e + sizeof(kExpires) - 1; i < line.size();) {
+    if (!isdigit(static_cast<unsigned char>(line[i]))) {
+      ++i;
+      continue;
+    }
+    const long long amount = read_number(line, i);
+    while (i < line.size() && isdigit(static_cast<unsigned char>(line[i]))) ++i;
+    while (i < line.size() && line[i] == ' ') ++i;
+    std::string unit;
+    while (i < line.size() && isalpha(static_cast<unsigned char>(line[i])))
+      unit.push_back(static_cast<char>(tolower(static_cast<unsigned char>(line[i++]))));
+    // "Milli..." before "Min...": both start with 'm'.
+    if (unit.rfind("mil", 0) == 0) continue;  // sub-second precision is noise for an 18h lockout
+    else if (unit.rfind("d", 0) == 0) seconds += amount * 86400;
+    else if (unit.rfind("h", 0) == 0) seconds += amount * 3600;
+    else if (unit.rfind("m", 0) == 0) seconds += amount * 60;
+    else if (unit.rfind("s", 0) == 0) seconds += amount;
+  }
+  if (seconds <= 0) return;
 
   const long long expiry = static_cast<long long>(now_unix_nano() / 1000000000ULL) + seconds;
   {
@@ -675,8 +690,7 @@ void OtlpExporter::parse_lockout(const std::string &line) {
     lockouts[target] = expiry;
   }
   if (debug_hits.load())
-    Zeal::Game::print_chat("[otlp] lockout %s expires in %lld %c-units (at unix %lld)", target.c_str(), amount, unit,
-                           expiry);
+    Zeal::Game::print_chat("[otlp] lockout %s in %lld s (expires at unix %lld)", target.c_str(), seconds, expiry);
 }
 
 std::string OtlpExporter::build_metrics_payload() {
