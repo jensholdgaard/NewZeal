@@ -601,6 +601,8 @@ void OtlpExporter::parse_dot_or_heal(const std::string &line) {
       const std::string dot_target = line.substr(0, p);  // display name; chat has no instance digits
       std::string rest = line.substr(from + 13);
       if (rest.rfind("your ", 0) == 0) {
+        if (debug_hits.load())
+          Zeal::Game::print_chat("[otlp] dot %s -> %s dmg=%lld", self, dot_target.c_str(), amount);
         record_combat_damage(self, "player", "outgoing", "dot", dot_target, amount);
       } else {
         size_t apos = rest.find("'s ");  // "<caster>'s <spell>"
@@ -621,7 +623,10 @@ void OtlpExporter::parse_dot_or_heal(const std::string &line) {
     size_t f = line.find(" for ", 16);
     if (f != std::string::npos) {
       long long amount = read_number(line, f + 5);
-      if (amount > 0) record_heal(self, "outgoing", amount);
+      if (amount > 0) {
+        if (debug_hits.load()) Zeal::Game::print_chat("[otlp] heal outgoing %lld", amount);
+        record_heal(self, "outgoing", amount);
+      }
     }
     return;
   }
@@ -630,7 +635,12 @@ void OtlpExporter::parse_dot_or_heal(const std::string &line) {
   p = line.find("You have been healed for ");
   if (p == 0) {
     long long amount = read_number(line, 25);
-    if (amount > 0) record_heal(self, "incoming", amount);
+    if (amount > 0) {
+      // Healing is only ever messaged to the target, so this is the line that carries every heal
+      // landing on you - including your own self-heals.
+      if (debug_hits.load()) Zeal::Game::print_chat("[otlp] heal received %lld", amount);
+      record_heal(self, "incoming", amount);
+    }
   }
 }
 
