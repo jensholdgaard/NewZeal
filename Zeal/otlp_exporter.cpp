@@ -54,6 +54,20 @@ std::string hex_id(int bytes) {
   return out;
 }
 
+// "a_temple_guard00" -> "Transient Patroller" style: underscores to spaces, instance digits dropped,
+// case preserved. The instance suffix is a spawn ID, and OpenTelemetry is explicit that IDs do not
+// belong in metric attributes - each one mints a new timeseries, so a camp of respawning mobs walks
+// the metric toward the cardinality limit for no analytical gain. It also makes the same mob look
+// like strangers across pulls, when "damage onto that mob" is the actual question. Chat-parsed names
+// (DoT ticks) already arrive in this form, so this makes both sources agree.
+std::string target_display(const std::string &raw) {
+  std::string d = raw;
+  while (!d.empty() && isdigit(static_cast<unsigned char>(d.back()))) d.pop_back();
+  for (auto &c : d)
+    if (c == '_') c = ' ';
+  return d;
+}
+
 // "a_temple_guard00" -> "a temple guard" (lowercase, underscores to spaces, trailing digits dropped)
 std::string display_of(const std::string &raw) {
   std::string d = raw;
@@ -214,7 +228,11 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
     const char *dtype = is_damage_shield_type(type) ? "damage_shield"
                         : (spell_id > 0)            ? "spell"
                                                     : melee_type_name(type);
-    const std::string tgt = target ? target->Name : "";  // raw spawn name, e.g. "a_temple_guard00"
+    // Two forms deliberately: the metric attribute is normalised (see target_display), while fight
+    // spans keep the raw spawn name so two mobs of the same name pulled at once stay separate
+    // encounters - a trace is about one fight, a metric is about damage onto that kind of target.
+    const std::string raw_tgt = target ? target->Name : "";
+    const std::string tgt = target_display(raw_tgt);
     if (debug_hits.load()) {
       // The raw packet fields, before interpretation: `type` is a SkillType for melee but a
       // DmgShieldType (244..249) for a damage shield, and spell_id is -1 (SPELL_UNKNOWN) when the
@@ -233,7 +251,7 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
     // Fight spans: track encounters with NPCs (the mob is the target when we hit it, the source
     // when it hits us).
     const bool outgoing = (direction[0] == 'o');
-    const std::string mob = outgoing ? tgt : std::string(source->Name);
+    const std::string mob = outgoing ? raw_tgt : std::string(source->Name);
     if (!mob.empty()) note_fight_damage(mob, outgoing, damage);
   });
 
