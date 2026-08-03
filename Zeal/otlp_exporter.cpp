@@ -137,44 +137,43 @@ const char *class_name(int class_id) {
   }
 }
 
-// Parses an EverQuest combat log line for damage the player is directly involved in and, if found,
-// fills direction ("outgoing"/"incoming"), type (the melee verb or "spell"), and amount. Returns
-// false for lines that aren't self-involved damage (e.g. a group member's hits) so they aren't
-// double counted. EQ renders the local player as "You"/"YOU".
-// Maps an EQ melee SkillType (Damage_Struct.type) to a canonical damage-type label.
-const char *melee_type_name(unsigned short skill) {
-  using S = Zeal::GameEnums::SkillType;
-  switch (skill) {
-    case S::Skill1HSlashing:
-    case S::Skill2HSlashing:
-      return "slash";
-    case S::Skill1HBlunt:
-    case S::Skill2HBlunt:
-      return "crush";
-    case S::Skill1HPiercing:
-      return "pierce";
-    case S::SkillBash:
-      return "bash";
-    case S::SkillKick:
-    case S::SkillFlyingKick:
-    case S::SkillRoundKick:
-      return "kick";
-    case S::SkillHandtoHand:
-      return "hth";
-    case S::SkillBackstab:
-      return "backstab";
-    case S::SkillArchery:
-      return "archery";
-    case S::SkillDragonPunch:
-    case S::SkillEagleStrike:
-      return "special";
-    default:
-      return "melee";
+// Maps the damage packet's `type` field to a canonical label.
+//
+// This field is NOT a SkillType, despite looking like one. The server sends
+// SkillDamageTypes[skill] (EQMacEmu common/eq_constants.h), a lookup that collapses several skills
+// onto one value:
+//
+//   1HBlunt, 2HBlunt      -> 0        HandtoHand              -> 4
+//   1HSlashing, 2HSlashing-> 1        Kick, RoundKick, Intimidation -> 30
+//   Archery               -> 7        1HPiercing              -> 36
+//   Backstab              -> 8        Throwing                -> 51
+//   Bash                  -> 10       DragonPunch             -> 21
+//   EagleStrike, TigerClaw-> 23       spell skills            -> 0xE7
+//                                     no damage type          -> 0xFF
+//
+// Reading it as a SkillType happened to work for slash (1) and bash (10), because those values
+// coincide, and quietly mislabelled everything else - hand-to-hand (4) landed in the "melee"
+// catch-all, which is how a bite showed up as generic melee.
+const char *damage_type_name(unsigned short damage_type) {
+  switch (damage_type) {
+    case 0: return "crush";
+    case 1: return "slash";
+    case 4: return "hth";
+    case 7: return "archery";
+    case 8: return "backstab";
+    case 10: return "bash";
+    case 21: return "special";  // dragon punch
+    case 23: return "special";  // eagle strike / tiger claw
+    case 30: return "kick";     // kick, round kick, intimidation
+    case 36: return "pierce";
+    case 51: return "throwing";
+    case 0xE7: return "spell";  // DamageTypeSpell
+    default: return "melee";    // includes DamageTypeUnknown (0xFF)
   }
 }
 
 // Damage shield hits arrive as ordinary damage packets, but the server puts a DmgShieldType into the
-// field where a SkillType would normally go, so they cannot be classified with melee_type_name:
+// field where a SkillType would normally go, so they cannot be classified with damage_type_name:
 //
 //   Mob::DamageShield()                    (EQMacEmu zone/attack.cpp, which Quarm derives from)
 //     cds->type    = spellbonuses.DamageShieldType;   // DS_DECAY(244) .. DS_THORNS(249)
@@ -227,7 +226,7 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
     // indistinguishable from a nuke.
     const char *dtype = is_damage_shield_type(type) ? "damage_shield"
                         : (spell_id > 0)            ? "spell"
-                                                    : melee_type_name(type);
+                                                    : damage_type_name(type);
     // Two forms deliberately: the metric attribute is normalised (see target_display), while fight
     // spans keep the raw spawn name so two mobs of the same name pulled at once stay separate
     // encounters - a trace is about one fight, a metric is about damage onto that kind of target.
