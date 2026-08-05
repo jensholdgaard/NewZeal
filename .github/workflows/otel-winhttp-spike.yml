@@ -54,27 +54,57 @@ jobs:
       - name: Configure opentelemetry-cpp with curl OFF
         shell: pwsh
         run: |
+          # Arguments as an array, not backtick-continued tokens: the first attempt passed
+          # "$env:RUNNER_TEMP" through literally and silently dropped -DWITH_HTTP_CLIENT_CURL=OFF,
+          # so curl was fetched anyway and 25 minutes were spent proving nothing.
           $gen = if ($env:ARCH -eq 'x86') { 'Win32' } else { 'x64' }
-          cmake -S $env:RUNNER_TEMP\otel-cpp -B $env:RUNNER_TEMP\otel-build `
-            -G "Visual Studio 17 2022" -A $gen `
-            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
-            -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TRIPLET" `
-            -DCMAKE_INSTALL_PREFIX=$env:RUNNER_TEMP\otel-install `
-            -DWITH_OTLP_HTTP=ON -DWITH_HTTP_CLIENT_CURL=OFF `
-            -DWITH_OTLP_GRPC=OFF -DWITH_EXAMPLES=OFF -DBUILD_TESTING=OFF `
-            -DOPENTELEMETRY_INSTALL=ON -DWITH_ABSEIL=ON
+          $src = Join-Path $env:RUNNER_TEMP 'otel-cpp'
+          $bld = Join-Path $env:RUNNER_TEMP 'otel-build'
+          $inst = Join-Path $env:RUNNER_TEMP 'otel-install'
+          echo "OTEL_INSTALL=$inst" >> $env:GITHUB_ENV
+          $args = @(
+            '-S', $src, '-B', $bld,
+            '-G', 'Visual Studio 17 2022', '-A', $gen,
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake",
+            "-DVCPKG_TARGET_TRIPLET=$env:VCPKG_TRIPLET",
+            "-DCMAKE_INSTALL_PREFIX=$inst",
+            '-DWITH_OTLP_HTTP=ON',
+            '-DWITH_HTTP_CLIENT_CURL=OFF',
+            '-DWITH_OTLP_GRPC=OFF',
+            '-DWITH_EXAMPLES=OFF',
+            '-DBUILD_TESTING=OFF',
+            '-DOPENTELEMETRY_INSTALL=ON',
+            '-DWITH_ABSEIL=ON'
+          )
+          Write-Host "cmake $($args -join ' ')"
+          & cmake @args
           if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
+
+      - name: Assert the configuration actually took (before building for 25 minutes)
+        shell: pwsh
+        run: |
+          $cache = Join-Path $env:RUNNER_TEMP 'otel-build\CMakeCache.txt'
+          $curl = Select-String -Path $cache -Pattern '^WITH_HTTP_CLIENT_CURL:' | ForEach-Object { $_.Line }
+          $prefix = Select-String -Path $cache -Pattern '^CMAKE_INSTALL_PREFIX:' | ForEach-Object { $_.Line }
+          Write-Host "  $curl"
+          Write-Host "  $prefix"
+          if ($curl -notmatch '=OFF') { throw "curl backend is still enabled: $curl" }
+          if ($prefix -match '\$env:') { throw "install prefix was not expanded: $prefix" }
+          if (Test-Path (Join-Path $env:RUNNER_TEMP 'otel-build\_deps\curl-src')) {
+            throw "curl was fetched despite WITH_HTTP_CLIENT_CURL=OFF"
+          }
+          Write-Host "curl backend off, install prefix resolved, no curl in _deps"
 
       - name: Build and install the SDK
         shell: pwsh
         run: |
-          cmake --build $env:RUNNER_TEMP\otel-build --config Release --target install -- /m
+          cmake --build (Join-Path $env:RUNNER_TEMP 'otel-build') --config Release --target install -- /m
           if ($LASTEXITCODE -ne 0) { throw "SDK build failed" }
 
       - name: Confirm no curl and no zlib came along
         shell: pwsh
         run: |
-          $libs = Get-ChildItem $env:RUNNER_TEMP\otel-install -Recurse -Include *.lib
+          $libs = Get-ChildItem $env:OTEL_INSTALL -Recurse -Include *.lib
           Write-Host "installed libs: $($libs.Count)"
           $curl = $libs | Where-Object { $_.Name -match 'curl' }
           if ($curl) { throw "curl libraries present: $($curl.Name -join ', ')" }
@@ -87,13 +117,17 @@ jobs:
         shell: pwsh
         run: |
           $gen = if ($env:ARCH -eq 'x86') { 'Win32' } else { 'x64' }
-          cmake -S spike/winhttp-client -B $env:RUNNER_TEMP\spike-build `
-            -G "Visual Studio 17 2022" -A $gen `
-            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
-            -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TRIPLET" `
-            -DCMAKE_PREFIX_PATH=$env:RUNNER_TEMP\otel-install
+          $bld = Join-Path $env:RUNNER_TEMP 'spike-build'
+          $args = @(
+            '-S', 'spike/winhttp-client', '-B', $bld,
+            '-G', 'Visual Studio 17 2022', '-A', $gen,
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake",
+            "-DVCPKG_TARGET_TRIPLET=$env:VCPKG_TRIPLET",
+            "-DCMAKE_PREFIX_PATH=$env:OTEL_INSTALL"
+          )
+          & cmake @args
           if ($LASTEXITCODE -ne 0) { throw "spike configure failed" }
-          cmake --build $env:RUNNER_TEMP\spike-build --config Release -- /m
+          & cmake --build $bld --config Release -- /m
           if ($LASTEXITCODE -ne 0) { throw "spike build failed" }
 
       - name: Deliver a real OTLP payload over WinHTTP
@@ -113,7 +147,7 @@ jobs:
             $body
           }
           Start-Sleep -Seconds 2
-          $exe = Get-ChildItem $env:RUNNER_TEMP\spike-build -Recurse -Filter smoke_test.exe | Select-Object -First 1
+          $exe = Get-ChildItem (Join-Path $env:RUNNER_TEMP 'spike-build') -Recurse -Filter smoke_test.exe | Select-Object -First 1
           & $exe.FullName "http://127.0.0.1:4318/v1/metrics"
           if ($LASTEXITCODE -ne 0) { throw "smoke test failed" }
           $received = Receive-Job $listener -Wait
