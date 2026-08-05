@@ -104,14 +104,9 @@ jobs:
           $vcpkg = (Get-ChildItem "$env:VCPKG_INSTALL\lib" -Filter *.lib | ForEach-Object { $_.Name })
           Write-Host "linking $($otel.Count) SDK archives and $($vcpkg.Count) vcpkg archives"
           $libs = (($otel + $vcpkg) -join ';')
-          @"
-<?xml version="1.0" encoding="utf-8"?>
-<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <PropertyGroup>
-    <OTEL_LIBS>$libs;</OTEL_LIBS>
-  </PropertyGroup>
-</Project>
-"@ | Set-Content -Path .\spike\zeal-sdk\otel_libs.generated.props -Encoding UTF8
+          $xml = '<?xml version="1.0" encoding="utf-8"?><Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">' +
+                 '<PropertyGroup><OTEL_LIBS>' + $libs + ';</OTEL_LIBS></PropertyGroup></Project>'
+          Set-Content -Path .\spike\zeal-sdk\otel_libs.generated.props -Value $xml -Encoding UTF8
 
           # The real question: does all of this link into a 32-bit /MT DLL that already carries
           # d3dx8.lib? Failure here is the answer, whatever it says.
