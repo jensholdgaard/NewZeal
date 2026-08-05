@@ -77,6 +77,10 @@ jobs:
             '-DWITH_OTLP_GRPC=OFF',
             '-DWITH_EXAMPLES=OFF',
             '-DBUILD_TESTING=OFF',
+            # Defaults to ON and is not covered by BUILD_TESTING, so the configure fails looking for
+            # benchmark::benchmark - which this spike has no use for.
+            '-DWITH_BENCHMARK=OFF',
+            '-DWITH_FUNC_TESTS=OFF',
             '-DOPENTELEMETRY_INSTALL=ON',
             '-DWITH_ABSEIL=ON'
           )
