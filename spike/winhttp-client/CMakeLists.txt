@@ -19,4 +19,6 @@ target_include_directories(winhttp_client PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(winhttp_client PUBLIC opentelemetry-cpp::api opentelemetry-cpp::sdk winhttp)
 
 add_executable(smoke_test smoke_test.cpp)
-target_link_libraries(smoke_test PRIVATE winhttp_client opentelemetry-cpp::otlp_http_client winhttp)
+# --periodic mode drives a real MeterProvider, so the metric exporter comes along too.
+target_link_libraries(smoke_test PRIVATE winhttp_client opentelemetry-cpp::otlp_http_client
+                      opentelemetry-cpp::otlp_http_metric_exporter opentelemetry-cpp::metrics winhttp)

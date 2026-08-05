@@ -10,13 +10,34 @@
 #include <string>
 #include <thread>
 
+#include <cstdlib>
+
 #include "opentelemetry/exporters/otlp/otlp_http_client.h"
+#include "opentelemetry/exporters/otlp/otlp_http_metric_exporter_factory.h"
+#include "opentelemetry/exporters/otlp/otlp_http_metric_exporter_options.h"
+#include "opentelemetry/metrics/provider.h"
+#include "opentelemetry/sdk/metrics/export/periodic_exporting_metric_reader_factory.h"
+#include "opentelemetry/sdk/metrics/export/periodic_exporting_metric_reader_options.h"
+#include "opentelemetry/sdk/metrics/meter_provider.h"
+#include "opentelemetry/sdk/metrics/meter_provider_factory.h"
+#include "opentelemetry/sdk/resource/resource.h"
 #include "winhttp_client.h"
 
 namespace otlp = opentelemetry::exporter::otlp;
+namespace metrics_sdk = opentelemetry::sdk::metrics;
+namespace metrics_api = opentelemetry::metrics;
+
+// Replicates what the in-game probe does: a real MeterProvider with a PeriodicExportingMetricReader
+// exporting on a timer, for several export cycles. The single-shot test below never exercised a
+// second export, and that is exactly where a session gets reused - the case that killed the game
+// client. One delivery proving the transport works says nothing about the tenth.
+static int RunPeriodic(const std::string &endpoint, int seconds);
 
 int main(int argc, char **argv) {
   const std::string endpoint = (argc > 1) ? argv[1] : "http://127.0.0.1:4318/v1/metrics";
+  if (argc > 2 && std::string(argv[2]) == "--periodic") {
+    return RunPeriodic(endpoint, (argc > 3) ? std::atoi(argv[3]) : 10);
+  }
 
   auto transport = std::make_shared<winhttp_client::HttpClient>();
   if (!transport->winhttp_session()) {
@@ -76,4 +97,51 @@ int main(int argc, char **argv) {
   }
   std::fprintf(stderr, "FAIL: status=%d last_event=%s\n", status, handler->last_event.c_str());
   return 1;
+}
+
+// --- periodic mode ------------------------------------------------------------------------------
+// Mirrors spike/zeal-sdk/otel_sdk_probe.cpp as closely as a standalone process can, so a failure
+// here is the failure that happens in the game, minus the game.
+static int RunPeriodic(const std::string &endpoint, int seconds) {
+  otlp::OtlpHttpMetricExporterOptions options;
+  options.url = endpoint;
+  options.content_type = otlp::HttpRequestContentType::kJson;
+  options.aggregation_temporality = otlp::PreferredAggregationTemporality::kCumulative;
+
+  auto exporter = otlp::OtlpHttpMetricExporterFactory::Create(options);
+
+  metrics_sdk::PeriodicExportingMetricReaderOptions reader_options;
+  reader_options.export_interval_millis = std::chrono::milliseconds(2000);
+  reader_options.export_timeout_millis = std::chrono::milliseconds(1500);
+  auto reader =
+      metrics_sdk::PeriodicExportingMetricReaderFactory::Create(std::move(exporter), reader_options);
+
+  auto resource = opentelemetry::sdk::resource::Resource::Create({
+      {"service.name", "everquest"},
+      {"service.version", "sdk-probe-periodic"},
+  });
+
+  auto provider = metrics_sdk::MeterProviderFactory::Create(
+      std::unique_ptr<metrics_sdk::ViewRegistry>(new metrics_sdk::ViewRegistry()), resource);
+  provider->AddMetricReader(std::move(reader));
+
+  std::shared_ptr<metrics_api::MeterProvider> api_provider(std::move(provider));
+  metrics_api::Provider::SetMeterProvider(api_provider);
+
+  auto meter = api_provider->GetMeter("zeal.sdk.probe", "sdk-probe");
+  auto counter = meter->CreateUInt64Counter("everquest.sdk.probe", "probe emitted by the SDK", "1");
+
+  std::printf("periodic mode: %d seconds, exporting every 2s\n", seconds);
+  std::fflush(stdout);
+  for (int i = 0; i < seconds; ++i) {
+    counter->Add(1);
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    std::printf("  t=%ds still alive\n", i + 1);
+    std::fflush(stdout);  // unbuffered: if it dies mid-run, the last line must already be on disk
+  }
+
+  static_cast<metrics_sdk::MeterProvider *>(api_provider.get())->ForceFlush(std::chrono::microseconds(2000000));
+  metrics_api::Provider::SetMeterProvider(std::shared_ptr<metrics_api::MeterProvider>());
+  std::printf("PASS: survived %d seconds of periodic export (~%d exports)\n", seconds, seconds / 2);
+  return 0;
 }
