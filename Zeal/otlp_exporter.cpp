@@ -2,6 +2,10 @@
 
 #include "everquest_semconv.h"  // generated from the semconv registry (see everquest-semconv/generate.sh)
 
+#ifdef ZEAL_OTEL_SDK
+#include "otel_sdk_probe.h"  // spike only; see spike/zeal-sdk and docs/decisions/otlp-sdk-vs-hand-rolled.md
+#endif
+
 #include <winhttp.h>
 
 #include <cctype>
@@ -306,6 +310,31 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                                       : "OTLP hit debug off.");
                                return true;
                              }
+#ifdef ZEAL_OTEL_SDK
+                             // Spike only: start the OpenTelemetry SDK inside the game process and
+                             // push one counter through it, over WinHTTP. Proves the SDK actually
+                             // runs here - linking proved nothing about runtime. The hand-rolled
+                             // exporter above is untouched and keeps running alongside it.
+                             if (args.size() == 2 && Zeal::String::compare_insensitive(args[1], "sdkprobe")) {
+                               static bool started = false;
+                               std::string err;
+                               if (!started) {
+                                 const std::string url = setting_endpoint.get() + "/v1/metrics";
+                                 if (!zeal_otel_sdk::Start(url, err)) {
+                                   Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "SDK probe failed to start: %s",
+                                                          err.c_str());
+                                   return true;
+                                 }
+                                 started = true;
+                                 Zeal::Game::print_chat("SDK probe started -> %s", url.c_str());
+                               }
+                               zeal_otel_sdk::Count(1);
+                               Zeal::Game::print_chat(
+                                   "SDK probe: counter incremented. It exports every 2s; look for "
+                                   "everquest_sdk_probe_total in Prometheus.");
+                               return true;
+                             }
+#endif
                              if (args.size() == 3 && Zeal::String::compare_insensitive(args[1], "scope")) {
                                if (Zeal::String::compare_insensitive(args[2], "self") ||
                                    Zeal::String::compare_insensitive(args[2], "all")) {
