@@ -114,9 +114,13 @@ Result — a valid PE32 i386 DLL:
 
 | | shipping (hand-rolled) | with the SDK |
 |---|---|---|
-| `Zeal.asi` | ~11.2 MB | **12.38 MB** |
+| `Zeal.asi` | ~11.2 MB | **12.86 MB** |
 | imports | — | `WINHTTP.dll`, no libcurl |
 | static archives linked | — | 119 (24 OpenTelemetry, 95 abseil/protobuf) |
+
+The first measurement read 12.38 MB, but the probe had no call site then, so the linker discarded
+most of what it had just linked. With `/otlp sdkprobe` actually reachable the figure is 12.86 MB -
+**+1.66 MB**. Measure a dependency with its entry point live, or the linker flatters it.
 
 So the two strongest arguments in "Problems with the SDK path" are now **measured as wrong**: the
 dependency tail does not require libcurl, and it does not double the download. `+1.2 MB` is what the
@@ -125,7 +129,7 @@ in the shipping build too — not a dependency the SDK dragged in.)
 
 ### What this does *not* settle
 
-- **The probe is a single counter, not a port.** The hand-rolled exporter's real work — the parsing,
+- **The probe is a single counter, not a port.** It is reachable from `/otlp sdkprobe`. The hand-rolled exporter's real work — the parsing,
   the semconv attributes, the fight/group/raid model — is untouched and still running.
 - **The WinHTTP adapter is unexercised** on cancellation, timeouts, TLS failure and concurrent
   sessions. It moves one payload on a happy path. That gap is the blocker for contributing it
