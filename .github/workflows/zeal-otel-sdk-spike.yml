@@ -104,7 +104,8 @@ jobs:
           $otel = (Get-ChildItem "$env:OTEL_INSTALL\lib" -Filter *.lib | ForEach-Object { $_.Name })
           $vcpkg = (Get-ChildItem "$env:VCPKG_INSTALL\lib" -Filter *.lib | ForEach-Object { $_.Name })
           Write-Host "linking $($otel.Count) SDK archives and $($vcpkg.Count) vcpkg archives"
-          $libs = (($otel + $vcpkg) -join ';')
+          # MSBuild parses ';' inside a /p: value as an argument separator, so it must be escaped.
+          $libs = (($otel + $vcpkg) -join '%3B')
           # The real question: does all of this link into a 32-bit /MT DLL that already carries
           # d3dx8.lib? Failure here is the answer, whatever it says.
           $env:ZEAL_OTEL_SDK = '1'
