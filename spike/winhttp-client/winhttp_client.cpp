@@ -1,6 +1,7 @@
 #include "winhttp_client.h"
 
 #include <algorithm>
+#include <exception>
 
 #pragma comment(lib, "winhttp.lib")
 
@@ -64,12 +65,33 @@ void Session::SendRequest(std::shared_ptr<http_client::EventHandler> callback) n
     callback->OnEvent(http_client::SessionState::CreateFailed, "no request");
     return;
   }
+  // Reusing a session for a second request would assign over a joinable std::thread, which calls
+  // std::terminate() - the process dies with no SEH exception, so no crash handler sees it and no
+  // minidump is written. Retire the previous worker first.
+  if (worker_.joinable()) {
+    if (worker_.get_id() == std::this_thread::get_id())
+      worker_.detach();
+    else
+      worker_.join();
+  }
   active_.store(true);
   // The contract is asynchronous: return promptly, report through the handler later. WinHTTP's own
   // async mode would avoid the thread, but a thread per in-flight export is simpler to get right and
   // the exporter batches, so there are few of them.
   auto self = shared_from_this();
-  worker_ = std::thread([self, callback]() { self->Exchange(callback); });
+  worker_ = std::thread([self, callback]() {
+    // An exception escaping a thread function is also std::terminate, and this one runs inside a
+    // game process where that means the player loses their session. Nothing here is worth a crash.
+    try {
+      self->Exchange(callback);
+    } catch (const std::exception &e) {
+      self->active_.store(false);
+      callback->OnEvent(http_client::SessionState::CreateFailed, e.what());
+    } catch (...) {
+      self->active_.store(false);
+      callback->OnEvent(http_client::SessionState::CreateFailed, "unknown exception in WinHTTP worker");
+    }
+  });
 }
 
 void Session::Exchange(std::shared_ptr<http_client::EventHandler> handler) {
