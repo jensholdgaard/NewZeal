@@ -29,7 +29,11 @@ jobs:
   build:
     runs-on: windows-2022
     env:
-      OTEL_CPP_VERSION: v1.24.0
+      # v1.24.0 cannot do this: it sets WITH_HTTP_CLIENT_CURL with a plain set(), which clobbers
+      # anything passed on the command line, so curl is mandatory whenever the HTTP exporter is on.
+      # The user-overridable cmake_dependent_option ("set OFF to supply a custom transport") arrived
+      # later - hence v1.28.0.
+      OTEL_CPP_VERSION: v1.28.0
       ARCH: ${{ inputs.arch || 'x64' }}
     steps:
       - uses: actions/checkout@v7
@@ -92,6 +96,11 @@ jobs:
           if ($prefix -match '\$env:') { throw "install prefix was not expanded: $prefix" }
           if (Test-Path (Join-Path $env:RUNNER_TEMP 'otel-build\_deps\curl-src')) {
             throw "curl was fetched despite WITH_HTTP_CLIENT_CURL=OFF"
+          }
+          # zlib is only pulled in for curl-based compression, so with curl off it must be absent -
+          # which is the collision that made the SDK unusable in the game client.
+          if (Test-Path (Join-Path $env:RUNNER_TEMP 'otel-build\_deps\zlib-src')) {
+            throw "zlib was fetched - the very dependency this spike exists to avoid"
           }
           Write-Host "curl backend off, install prefix resolved, no curl in _deps"
 
