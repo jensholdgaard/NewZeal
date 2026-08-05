@@ -1,0 +1,91 @@
+# Spike: link the OpenTelemetry C++ SDK into Zeal itself, over the WinHTTP transport.
+#
+# spike/otel-winhttp proved the SDK builds for x86 with curl off and a WinHTTP client supplied. That
+# was a standalone executable. This asks the harder question: does it link into the injected game
+# DLL - 32-bit, static CRT, alongside a 2003 d3dx8.lib - and produce a loadable Zeal.asi?
+#
+# Everything must be /MT here: Zeal is MultiThreaded, so the -md triplet used by the standalone
+# spike would fail on the CRT before anything interesting happened.
+name: spike - Zeal with the OTel SDK
+
+on:
+  push:
+    branches: ['spike/zeal-otel-sdk']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    env:
+      OTEL_CPP_VERSION: v1.28.0
+      TRIPLET: x86-windows-static   # static CRT (/MT), unlike the -md triplet used standalone
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Fetch opentelemetry-cpp
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch $env:OTEL_CPP_VERSION --recurse-submodules `
+            https://github.com/open-telemetry/opentelemetry-cpp.git (Join-Path $env:RUNNER_TEMP 'otel-cpp')
+
+      - name: protobuf and abseil with the static CRT, no zlib
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install "protobuf:$env:TRIPLET" "abseil:$env:TRIPLET"
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed" }
+          echo "VCPKG_INSTALL=$env:VCPKG_INSTALLATION_ROOT\installed\$env:TRIPLET" >> $env:GITHUB_ENV
+
+      - name: Build the SDK (x86, /MT, curl off)
+        shell: pwsh
+        run: |
+          $src = Join-Path $env:RUNNER_TEMP 'otel-cpp'
+          $bld = Join-Path $env:RUNNER_TEMP 'otel-build'
+          $inst = Join-Path $env:RUNNER_TEMP 'otel-install'
+          echo "OTEL_INSTALL=$inst" >> $env:GITHUB_ENV
+          $args = @(
+            '-S', $src, '-B', $bld, '-G', 'Visual Studio 17 2022', '-A', 'Win32',
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake",
+            "-DVCPKG_TARGET_TRIPLET=$env:TRIPLET",
+            "-DCMAKE_INSTALL_PREFIX=$inst",
+            '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded',   # match Zeal's /MT
+            '-DWITH_OTLP_HTTP=ON', '-DWITH_HTTP_CLIENT_CURL=OFF', '-DWITH_OTLP_GRPC=OFF',
+            '-DWITH_EXAMPLES=OFF', '-DBUILD_TESTING=OFF', '-DWITH_BENCHMARK=OFF',
+            '-DWITH_FUNC_TESTS=OFF', '-DOPENTELEMETRY_INSTALL=ON', '-DWITH_ABSEIL=ON'
+          )
+          & cmake @args
+          if ($LASTEXITCODE -ne 0) { throw "configure failed" }
+          $cache = Join-Path $bld 'CMakeCache.txt'
+          $curl = (Select-String -Path $cache -Pattern '^WITH_HTTP_CLIENT_CURL:').Line
+          if ($curl -notmatch '=OFF') { throw "curl still on: $curl" }
+          Write-Host "  $curl"
+          & cmake --build $bld --config Release --target install -- /m
+          if ($LASTEXITCODE -ne 0) { throw "SDK build failed" }
+
+      - name: Build Zeal with the SDK linked in
+        shell: pwsh
+        run: |
+          # The real question: does all of this link into a 32-bit /MT DLL that already carries
+          # d3dx8.lib? Failure here is the answer, whatever it says.
+          $env:ZEAL_OTEL_SDK = '1'
+          & msbuild /m /p:Configuration=Release /p:Platform=x86 /p:LanguageStandard=stdcpp20 `
+            /p:ZEAL_OTEL_SDK=1 /p:OTEL_INSTALL="$env:OTEL_INSTALL" /p:VCPKG_INSTALL="$env:VCPKG_INSTALL" `
+            /p:ExportHeader="" /p:ScanDependencies="" .\Zeal.sln
+          if ($LASTEXITCODE -ne 0) { throw "Zeal build with the SDK failed" }
+
+      - name: Report what it costs
+        shell: pwsh
+        run: |
+          $asi = Get-Item .\Release\Zeal.asi
+          $mb = [math]::Round($asi.Length / 1MB, 2)
+          Write-Host "Zeal.asi with the SDK: $mb MB"
+          Write-Host "(the shipping hand-rolled build is about 11.2 MB - the difference is the"
+          Write-Host " decision this spike exists to inform)"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: zeal-otel-sdk-winhttp
+          path: |
+            Release/Zeal.asi
+            Release/Zeal.pdb
