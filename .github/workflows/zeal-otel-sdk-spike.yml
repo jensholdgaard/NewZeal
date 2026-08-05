@@ -29,9 +29,9 @@ jobs:
       # The SDK build is ~25 minutes and depends only on the pinned version and triplet, while the
       # interesting failures are all in the Zeal link that follows it. Cache it so iterating on the
       # link costs minutes rather than half-hours.
-      - name: Cache the built SDK
+      - name: Restore the built SDK
         id: sdk-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             ${{ runner.temp }}/otel-install
@@ -84,14 +84,33 @@ jobs:
           & cmake --build $bld --config Release --target install -- /m
           if ($LASTEXITCODE -ne 0) { throw "SDK build failed" }
 
+      # cache@v4 only saves on success, and every failure so far has been in the link that follows -
+      # so the 25-minute SDK build was repeated each time. Save it as soon as it exists.
+      - name: Save the SDK to cache
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ runner.temp }}/otel-install
+            C:/vcpkg/installed/x86-windows-static
+          key: otel-${{ env.OTEL_CPP_VERSION }}-${{ env.TRIPLET }}-mt-v1
+
       - name: Build Zeal with the SDK linked in
         shell: pwsh
         run: |
+          # The linker needs the archives named, not just their directory. Enumerating them keeps
+          # this honest about what the SDK actually costs to link: every abseil and protobuf archive
+          # comes along too.
+          $otel = (Get-ChildItem "$env:OTEL_INSTALL\lib" -Filter *.lib | ForEach-Object { $_.Name })
+          $vcpkg = (Get-ChildItem "$env:VCPKG_INSTALL\lib" -Filter *.lib | ForEach-Object { $_.Name })
+          Write-Host "linking $($otel.Count) SDK archives and $($vcpkg.Count) vcpkg archives"
+          $libs = (($otel + $vcpkg) -join ';')
           # The real question: does all of this link into a 32-bit /MT DLL that already carries
           # d3dx8.lib? Failure here is the answer, whatever it says.
           $env:ZEAL_OTEL_SDK = '1'
           & msbuild /m /p:Configuration=Release /p:Platform=x86 /p:LanguageStandard=stdcpp20 `
             /p:ZEAL_OTEL_SDK=1 /p:OTEL_INSTALL="$env:OTEL_INSTALL" /p:VCPKG_INSTALL="$env:VCPKG_INSTALL" `
+            /p:OTEL_LIBS="$libs" `
             /p:ExportHeader="" /p:ScanDependencies="" .\Zeal.sln
           if ($LASTEXITCODE -ne 0) { throw "Zeal build with the SDK failed" }
 
