@@ -98,20 +98,26 @@ jobs:
       - name: Build Zeal with the SDK linked in
         shell: pwsh
         run: |
-          # The linker needs the archives named, not just their directory. Enumerating them keeps
-          # this honest about what the SDK actually costs to link: every abseil and protobuf archive
-          # comes along too.
+          # Write the archive list to a props file the project imports. Passing it via /p: meant
+          # MSBuild split it on ';' and fed the linker a junk input; a file avoids that entirely.
           $otel = (Get-ChildItem "$env:OTEL_INSTALL\lib" -Filter *.lib | ForEach-Object { $_.Name })
           $vcpkg = (Get-ChildItem "$env:VCPKG_INSTALL\lib" -Filter *.lib | ForEach-Object { $_.Name })
           Write-Host "linking $($otel.Count) SDK archives and $($vcpkg.Count) vcpkg archives"
-          # MSBuild parses ';' inside a /p: value as an argument separator, so it must be escaped.
-          $libs = (($otel + $vcpkg) -join '%3B')
+          $libs = (($otel + $vcpkg) -join ';')
+          @"
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <OTEL_LIBS>$libs;</OTEL_LIBS>
+  </PropertyGroup>
+</Project>
+"@ | Set-Content -Path .\spike\zeal-sdk\otel_libs.generated.props -Encoding UTF8
+
           # The real question: does all of this link into a 32-bit /MT DLL that already carries
           # d3dx8.lib? Failure here is the answer, whatever it says.
           $env:ZEAL_OTEL_SDK = '1'
           & msbuild /m /p:Configuration=Release /p:Platform=x86 /p:LanguageStandard=stdcpp20 `
             /p:ZEAL_OTEL_SDK=1 /p:OTEL_INSTALL="$env:OTEL_INSTALL" /p:VCPKG_INSTALL="$env:VCPKG_INSTALL" `
-            /p:OTEL_LIBS="$libs" `
             /p:ExportHeader="" /p:ScanDependencies="" .\Zeal.sln
           if ($LASTEXITCODE -ne 0) { throw "Zeal build with the SDK failed" }
 
