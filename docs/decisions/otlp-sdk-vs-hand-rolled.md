@@ -139,3 +139,37 @@ in the shipping build too — not a dependency the SDK dragged in.)
 
 The decision to keep the hand-rolled exporter stands — but it now rests on scope and build cost,
 which are true, rather than on binary size and libcurl, which were not.
+
+## Correction (2026-08-06): what the first spike actually proved, and the crash it hid
+
+The section above claimed the SDK works over WinHTTP. It did not prove that. The standalone test
+drove `winhttp_client::HttpClient` **directly** and never went near the path the SDK itself uses, so
+it validated the transport while leaving the SDK's route to that transport completely untested.
+
+Loaded into the game, `/otlp sdkprobe` killed the client instantly - no crash handler, no minidump.
+The cause was not Wine, threading, or the transport:
+
+    No default HTTP client backend is compiled in. Use the HttpClientFactory or
+    HttpClient constructor overloads, or enable curl support (WITH_HTTP_CLIENT_CURL=ON).
+
+`OtlpHttpMetricExporterFactory::Create(options)` reaches for the SDK's *default* HTTP backend, which
+with `WITH_HTTP_CLIENT_CURL=OFF` is not compiled in - and the SDK's response is to terminate the
+process. Standalone that is an error line and exit 9. Inside a game client it is the player losing
+their session with nothing written down. Supplying a custom transport requires the injection
+constructor, `OtlpHttpMetricExporter(options, http_client)`; switching curl off and implementing
+`HttpClientFactory` is not sufficient on its own.
+
+With the transport injected, verified end to end under Wine against a live collector:
+
+    periodic mode: 12 seconds, exporting every 2s ... PASS (~6 exports)
+    everquest_sdk_probe_total{service_version="sdk-probe-periodic"} = 12   # in Prometheus
+
+### The testing lesson, which outlived the bug
+
+A passing test that bypasses the integration point is worse than no test: it converts an unknown
+into false confidence. The single-shot test passed under Wine on the same machine, minutes after the
+game died on the same code - because it exercised the component and not the wiring. Two `terminate`
+paths were found and fixed while reasoning from the symptom; both were real, neither was the cause.
+
+Anything claiming the SDK path works must drive `MeterProvider` -> reader -> exporter, the way the
+game does, for more than one export cycle.
