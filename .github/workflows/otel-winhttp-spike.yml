@@ -1,0 +1,121 @@
+# Spike: can opentelemetry-cpp be built with the curl transport switched off and a WinHTTP one
+# supplied instead?
+#
+# This is the question that killed the SDK evaluation. curl brings zlib, and the game links a 2003
+# d3dx8.lib with zlib already inside it, so `_inflate` is defined twice and the link fails. Upstream
+# supports the swap - WITH_HTTP_CLIENT_CURL's own help text says "set OFF to supply a custom
+# transport" - but nobody ships a Windows-native transport, so this proves whether the extension
+# point actually holds when you use it.
+#
+# Deliberately not part of the Zeal build: it answers a design question and must never gate a
+# release.
+name: spike - otel-cpp with WinHTTP
+
+on:
+  push:
+    branches: ['spike/otel-winhttp']
+    paths:
+      - 'spike/winhttp-client/**'
+      - '.github/workflows/otel-winhttp-spike.yml'
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: Target architecture (x64 proves the port; x86 is what the game needs)
+        default: x64
+        type: choice
+        options: [x64, x86]
+
+jobs:
+  build:
+    runs-on: windows-2022
+    env:
+      OTEL_CPP_VERSION: v1.24.0
+      ARCH: ${{ inputs.arch || 'x64' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Fetch opentelemetry-cpp
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch $env:OTEL_CPP_VERSION --recurse-submodules `
+            https://github.com/open-telemetry/opentelemetry-cpp.git $env:RUNNER_TEMP\otel-cpp
+          Write-Host "otel-cpp $env:OTEL_CPP_VERSION checked out"
+
+      - name: Install protobuf and abseil WITHOUT zlib
+        shell: pwsh
+        run: |
+          # The zlib feature is exactly what must not come along: it is the collision that made the
+          # SDK unusable in the game client, and it is optional here.
+          $triplet = if ($env:ARCH -eq 'x86') { 'x86-windows-static-md' } else { 'x64-windows-static-md' }
+          echo "VCPKG_TRIPLET=$triplet" >> $env:GITHUB_ENV
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install "protobuf:$triplet" "abseil:$triplet"
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed" }
+
+      - name: Configure opentelemetry-cpp with curl OFF
+        shell: pwsh
+        run: |
+          $gen = if ($env:ARCH -eq 'x86') { 'Win32' } else { 'x64' }
+          cmake -S $env:RUNNER_TEMP\otel-cpp -B $env:RUNNER_TEMP\otel-build `
+            -G "Visual Studio 17 2022" -A $gen `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TRIPLET" `
+            -DCMAKE_INSTALL_PREFIX=$env:RUNNER_TEMP\otel-install `
+            -DWITH_OTLP_HTTP=ON -DWITH_HTTP_CLIENT_CURL=OFF `
+            -DWITH_OTLP_GRPC=OFF -DWITH_EXAMPLES=OFF -DBUILD_TESTING=OFF `
+            -DOPENTELEMETRY_INSTALL=ON -DWITH_ABSEIL=ON
+          if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
+
+      - name: Build and install the SDK
+        shell: pwsh
+        run: |
+          cmake --build $env:RUNNER_TEMP\otel-build --config Release --target install -- /m
+          if ($LASTEXITCODE -ne 0) { throw "SDK build failed" }
+
+      - name: Confirm no curl and no zlib came along
+        shell: pwsh
+        run: |
+          $libs = Get-ChildItem $env:RUNNER_TEMP\otel-install -Recurse -Include *.lib
+          Write-Host "installed libs: $($libs.Count)"
+          $curl = $libs | Where-Object { $_.Name -match 'curl' }
+          if ($curl) { throw "curl libraries present: $($curl.Name -join ', ')" }
+          Write-Host "no curl libraries in the install tree"
+          $installed = & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" list
+          if ($installed -match '^zlib') { Write-Host "NOTE: zlib is present in vcpkg: $($installed | Select-String '^zlib')" }
+          else { Write-Host "zlib is absent from the vcpkg tree" }
+
+      - name: Build the WinHTTP transport and smoke test
+        shell: pwsh
+        run: |
+          $gen = if ($env:ARCH -eq 'x86') { 'Win32' } else { 'x64' }
+          cmake -S spike/winhttp-client -B $env:RUNNER_TEMP\spike-build `
+            -G "Visual Studio 17 2022" -A $gen `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TRIPLET" `
+            -DCMAKE_PREFIX_PATH=$env:RUNNER_TEMP\otel-install
+          if ($LASTEXITCODE -ne 0) { throw "spike configure failed" }
+          cmake --build $env:RUNNER_TEMP\spike-build --config Release -- /m
+          if ($LASTEXITCODE -ne 0) { throw "spike build failed" }
+
+      - name: Deliver a real OTLP payload over WinHTTP
+        shell: pwsh
+        run: |
+          # A listener that accepts the POST and answers 200, so the test proves delivery rather
+          # than merely that nothing crashed.
+          $listener = Start-Job {
+            $http = [System.Net.HttpListener]::new()
+            $http.Prefixes.Add('http://127.0.0.1:4318/')
+            $http.Start()
+            $ctx = $http.GetContext()
+            $body = (New-Object System.IO.StreamReader($ctx.Request.InputStream)).ReadToEnd()
+            $ctx.Response.StatusCode = 200
+            $ctx.Response.Close()
+            $http.Stop()
+            $body
+          }
+          Start-Sleep -Seconds 2
+          $exe = Get-ChildItem $env:RUNNER_TEMP\spike-build -Recurse -Filter smoke_test.exe | Select-Object -First 1
+          & $exe.FullName "http://127.0.0.1:4318/v1/metrics"
+          if ($LASTEXITCODE -ne 0) { throw "smoke test failed" }
+          $received = Receive-Job $listener -Wait
+          if ($received -notmatch 'spike.counter') { throw "listener did not receive the payload: $received" }
+          Write-Host "listener received the OTLP payload: $($received.Substring(0, [Math]::Min(120, $received.Length)))"
