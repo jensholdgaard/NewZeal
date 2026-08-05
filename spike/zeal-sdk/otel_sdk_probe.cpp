@@ -80,7 +80,7 @@ bool Start(const std::string &endpoint, std::string &error) {
 
 void Count(long long value) {
   if (!g_provider) return;
-  auto meter = metrics_api::Provider::GetMeterProvider()->GetMeter("zeal.sdk.probe", ZEAL_VERSION);
+  auto meter = metrics_api::Provider::GetMeterProvider()->GetMeter("zeal.sdk.probe", "sdk-probe");
   static auto counter = meter->CreateUInt64Counter("everquest.sdk.probe", "probe emitted by the SDK", "1");
   counter->Add(static_cast<uint64_t>(value < 0 ? 0 : value));
 }
