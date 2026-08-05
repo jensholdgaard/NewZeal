@@ -24,26 +24,47 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: microsoft/setup-msbuild@v3
+
+      # The SDK build is ~25 minutes and depends only on the pinned version and triplet, while the
+      # interesting failures are all in the Zeal link that follows it. Cache it so iterating on the
+      # link costs minutes rather than half-hours.
+      - name: Cache the built SDK
+        id: sdk-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/otel-install
+            C:/vcpkg/installed/x86-windows-static
+          key: otel-${{ env.OTEL_CPP_VERSION }}-${{ env.TRIPLET }}-mt-v1
+
       - name: Fetch opentelemetry-cpp
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           git clone --depth 1 --branch $env:OTEL_CPP_VERSION --recurse-submodules `
             https://github.com/open-telemetry/opentelemetry-cpp.git (Join-Path $env:RUNNER_TEMP 'otel-cpp')
 
       - name: protobuf and abseil with the static CRT, no zlib
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install "protobuf:$env:TRIPLET" "abseil:$env:TRIPLET"
           if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed" }
+
+      - name: Point the build at the SDK (cached or freshly built)
+        shell: pwsh
+        run: |
           echo "VCPKG_INSTALL=$env:VCPKG_INSTALLATION_ROOT\installed\$env:TRIPLET" >> $env:GITHUB_ENV
+          echo "OTEL_INSTALL=$(Join-Path $env:RUNNER_TEMP 'otel-install')" >> $env:GITHUB_ENV
 
       - name: Build the SDK (x86, /MT, curl off)
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           $src = Join-Path $env:RUNNER_TEMP 'otel-cpp'
           $bld = Join-Path $env:RUNNER_TEMP 'otel-build'
           $inst = Join-Path $env:RUNNER_TEMP 'otel-install'
-          echo "OTEL_INSTALL=$inst" >> $env:GITHUB_ENV
           $args = @(
             '-S', $src, '-B', $bld, '-G', 'Visual Studio 17 2022', '-A', 'Win32',
             "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake",
