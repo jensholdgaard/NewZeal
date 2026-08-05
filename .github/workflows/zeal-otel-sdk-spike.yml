@@ -95,6 +95,34 @@ jobs:
             C:/vcpkg/installed/x86-windows-static
           key: otel-${{ env.OTEL_CPP_VERSION }}-${{ env.TRIPLET }}-mt-v1
 
+      # The in-game crash happened under Wine, while this same transport passes on real Windows.
+      # Publishing the standalone test lets the Wine path be reproduced outside the game, instead of
+      # costing a player their session each time.
+      - name: Build the standalone smoke test (x86, /MT) for Wine testing
+        shell: pwsh
+        run: |
+          $bld = Join-Path $env:RUNNER_TEMP 'spike-x86'
+          $cargs = @(
+            '-S', '.\\spike\\winhttp-client', '-B', $bld, '-G', 'Visual Studio 17 2022', '-A', 'Win32',
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\\scripts\\buildsystems\\vcpkg.cmake",
+            "-DVCPKG_TARGET_TRIPLET=$env:TRIPLET",
+            "-DCMAKE_PREFIX_PATH=$env:OTEL_INSTALL",
+            '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded'
+          )
+          & cmake @cargs
+          if ($LASTEXITCODE -ne 0) { throw "smoke test configure failed" }
+          & cmake --build $bld --config Release
+          if ($LASTEXITCODE -ne 0) { throw "smoke test build failed" }
+          $exe = Get-ChildItem $bld -Recurse -Filter smoke_test.exe | Select-Object -First 1
+          New-Item -ItemType Directory -Force -Path .\\smoke-out | Out-Null
+          Copy-Item $exe.FullName .\\smoke-out\\
+          Write-Host "smoke_test.exe: $([math]::Round($exe.Length/1MB,2)) MB"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: winhttp-smoke-x86
+          path: smoke-out/smoke_test.exe
+
       - name: Build Zeal with the SDK linked in
         shell: pwsh
         run: |
