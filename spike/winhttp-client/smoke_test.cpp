@@ -13,12 +13,13 @@
 #include <cstdlib>
 
 #include "opentelemetry/exporters/otlp/otlp_http_client.h"
-#include "opentelemetry/exporters/otlp/otlp_http_metric_exporter_factory.h"
+#include "opentelemetry/exporters/otlp/otlp_http_metric_exporter.h"
 #include "opentelemetry/exporters/otlp/otlp_http_metric_exporter_options.h"
 #include "opentelemetry/metrics/provider.h"
 #include "opentelemetry/sdk/metrics/export/periodic_exporting_metric_reader_factory.h"
 #include "opentelemetry/sdk/metrics/export/periodic_exporting_metric_reader_options.h"
 #include "opentelemetry/sdk/metrics/meter_provider.h"
+#include "opentelemetry/sdk/metrics/push_metric_exporter.h"
 #include "opentelemetry/sdk/metrics/meter_provider_factory.h"
 #include "opentelemetry/sdk/resource/resource.h"
 #include "winhttp_client.h"
@@ -108,7 +109,11 @@ static int RunPeriodic(const std::string &endpoint, int seconds) {
   options.content_type = otlp::HttpRequestContentType::kJson;
   options.aggregation_temporality = otlp::PreferredAggregationTemporality::kCumulative;
 
-  auto exporter = otlp::OtlpHttpMetricExporterFactory::Create(options);
+  // Inject our transport rather than going through the Factory, which reaches for a default HTTP
+  // backend that does not exist in this configuration and kills the process.
+  auto transport = std::make_shared<winhttp_client::HttpClient>();
+  auto exporter = std::unique_ptr<metrics_sdk::PushMetricExporter>(
+      new otlp::OtlpHttpMetricExporter(options, transport));
 
   metrics_sdk::PeriodicExportingMetricReaderOptions reader_options;
   reader_options.export_interval_millis = std::chrono::milliseconds(2000);

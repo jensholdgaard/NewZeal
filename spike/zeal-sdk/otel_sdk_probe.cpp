@@ -16,14 +16,16 @@
 #undef min
 #undef max
 
-#include "opentelemetry/exporters/otlp/otlp_http_metric_exporter_factory.h"
+#include "opentelemetry/exporters/otlp/otlp_http_metric_exporter.h"
 #include "opentelemetry/exporters/otlp/otlp_http_metric_exporter_options.h"
 #include "opentelemetry/metrics/provider.h"
 #include "opentelemetry/sdk/metrics/meter_provider.h"
+#include "opentelemetry/sdk/metrics/push_metric_exporter.h"
 #include "opentelemetry/sdk/metrics/meter_provider_factory.h"
 #include "opentelemetry/sdk/metrics/export/periodic_exporting_metric_reader_factory.h"
 #include "opentelemetry/sdk/metrics/export/periodic_exporting_metric_reader_options.h"
 #include "opentelemetry/sdk/resource/resource.h"
+#include "winhttp_client.h"
 
 #pragma pop_macro("max")
 #pragma pop_macro("min")
@@ -48,7 +50,13 @@ bool Start(const std::string &endpoint, std::string &error) {
     options.content_type = otlp::HttpRequestContentType::kJson;
     options.aggregation_temporality = otlp::PreferredAggregationTemporality::kCumulative;
 
-    auto exporter = otlp::OtlpHttpMetricExporterFactory::Create(options);
+    // Construct the exporter around our transport explicitly. The Factory routes through the
+    // SDK's *default* HTTP backend, which with WITH_HTTP_CLIENT_CURL=OFF is not compiled in at all -
+    // and the SDK responds by terminating the process. In a game that is the client vanishing with
+    // no crash handler, which is exactly what happened. Injection is the supported path.
+    auto transport = std::make_shared<winhttp_client::HttpClient>();
+    auto exporter = std::unique_ptr<metrics_sdk::PushMetricExporter>(
+        new otlp::OtlpHttpMetricExporter(options, transport));
 
     metrics_sdk::PeriodicExportingMetricReaderOptions reader_options;
     reader_options.export_interval_millis = std::chrono::milliseconds(2000);
