@@ -98,3 +98,40 @@ is unlikely to be accepted, and reasonably so. ~600 self-contained lines using t
 The SDK branch is preserved. Revisit if: histograms or exemplars are needed (hand-rolling those is
 genuinely hairy), several more serialization bugs slip past the CI validation, or upstream adopts a
 package manager and the dependency tree stops being a fork-local cost.
+
+## Measurement (2026-08-05): the SDK does link, over WinHTTP, for +1.2 MB
+
+The Correction above argued curl was never mandatory. That has now been built rather than reasoned
+about, in two steps:
+
+1. `spike/winhttp-client` — a WinHTTP implementation of the SDK's `HttpClient`/`Session`/`Request`
+   abstractions, built against opentelemetry-cpp v1.28.0 with `-DWITH_HTTP_CLIENT_CURL=OFF`. CI
+   (`otel-winhttp-spike.yml`) delivers a real payload to a local listener on **x64 and x86**.
+2. `spike/zeal-sdk` — that SDK linked into `Zeal.asi` itself: 32-bit, `/MT`, alongside `d3dx8.lib`,
+   with a `MeterProvider` and one counter reachable from `/otlp sdkprobe`.
+
+Result — a valid PE32 i386 DLL:
+
+| | shipping (hand-rolled) | with the SDK |
+|---|---|---|
+| `Zeal.asi` | ~11.2 MB | **12.38 MB** |
+| imports | — | `WINHTTP.dll`, no libcurl |
+| static archives linked | — | 119 (24 OpenTelemetry, 95 abseil/protobuf) |
+
+So the two strongest arguments in "Problems with the SDK path" are now **measured as wrong**: the
+dependency tail does not require libcurl, and it does not double the download. `+1.2 MB` is what the
+linker actually keeps. (The `zlib` strings in the binary are Zeal's own vendored `miniz.c`, present
+in the shipping build too — not a dependency the SDK dragged in.)
+
+### What this does *not* settle
+
+- **The probe is a single counter, not a port.** The hand-rolled exporter's real work — the parsing,
+  the semconv attributes, the fight/group/raid model — is untouched and still running.
+- **The WinHTTP adapter is unexercised** on cancellation, timeouts, TLS failure and concurrent
+  sessions. It moves one payload on a happy path. That gap is the blocker for contributing it
+  upstream, where those paths are not optional.
+- **Build cost is real**: ~25 minutes for the SDK, and 119 archives is a meaningful step up in what
+  a contributor must set up to build this fork.
+
+The decision to keep the hand-rolled exporter stands — but it now rests on scope and build cost,
+which are true, rather than on binary size and libcurl, which were not.
