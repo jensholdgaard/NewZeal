@@ -40,6 +40,11 @@ void RecordDamage(const std::string &source, const std::string &source_type, con
 void RecordCompleteHeal(const std::string &caster, const std::string &target, const std::string &zone,
                         int chain_position, int caster_mana_percent);
 
+// The "GO - <name>" cue at the end of a cleric's macro, telling the next cleric to start. Recording
+// when it was said lets the next announcement be measured against it: how long someone took to
+// answer their cue is the earliest sign a chain is drifting.
+void NoteChainHandoff(const std::string &next_caster);
+
 // Closes chains that have gone quiet, so a chain span does not stay open all night. Called from the
 // game-thread tick.
 void SweepCompleteHealChains();

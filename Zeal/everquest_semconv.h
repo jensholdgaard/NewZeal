@@ -45,6 +45,8 @@ inline constexpr const char *kEverquestGroupLeader = "everquest.group.leader";
 
 inline constexpr const char *kEverquestHealCasterManaPercent = "everquest.heal.caster.mana.percent";
 
+inline constexpr const char *kEverquestHealChainHandoffMs = "everquest.heal.chain.handoff.ms";
+
 inline constexpr const char *kEverquestHealChainPosition = "everquest.heal.chain.position";
 
 inline constexpr const char *kEverquestRaidTarget = "everquest.raid.target";

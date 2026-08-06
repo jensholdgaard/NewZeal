@@ -33,6 +33,8 @@
 // Defined below, next to the chat handling it belongs with.
 static bool parse_ch_announce(const std::string &line, std::string &caster, std::string &target,
                               int &position, int &mana_percent);
+// "GO - <name>": the cue the macro sends to whoever is next in the chain.
+static bool parse_ch_handoff(const std::string &line, std::string &next_caster);
 #endif
 
 namespace {
@@ -216,6 +218,11 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
       // Complete Heal chains. The announcement is a cleric's macro line, not a combat message, so it
       // is read here rather than from the damage packets.
       std::string ch_caster, ch_target;
+      std::string ch_next;
+      if (parse_ch_handoff(data, ch_next)) {
+        zeal::instrumentation::NoteChainHandoff(ch_next);
+        if (debug_hits.load()) Zeal::Game::print_chat("OTLP CH handoff -> %s", ch_next.c_str());
+      }
       int ch_mana = -1, ch_pos = -1;
       if (parse_ch_announce(data, ch_caster, ch_target, ch_pos, ch_mana)) {
         zeal::instrumentation::RecordCompleteHeal(ch_caster, ch_target, current_zone_name(), ch_pos, ch_mana);
@@ -463,6 +470,19 @@ static bool parse_ch_announce(const std::string &line, std::string &caster, std:
   if (tells != std::string::npos && tells < marker)
     caster = Zeal::String::trim_and_reduce_spaces(line.substr(0, tells));
   return !caster.empty();
+}
+
+// "/4 GO - Abuelo" - the last line of the macro, telling the next cleric to start. Anchored on
+// " GO - " for the same reason as the CH marker: the channel prefix varies and the guild's own
+// numbering sits in front of it.
+static bool parse_ch_handoff(const std::string &line, std::string &next_caster) {
+  const size_t marker = line.find(" GO - ");
+  if (marker == std::string::npos) return false;
+  size_t stop = line.find('\'', marker + 6);
+  if (stop == std::string::npos) stop = line.size();
+  next_caster = Zeal::String::trim_and_reduce_spaces(line.substr(marker + 6, stop - marker - 6));
+  // A name, not a sentence: anything with spaces is someone talking about the chain, not a cue.
+  return !next_caster.empty() && next_caster.find(' ') == std::string::npos;
 }
 
 void OtlpExporter::log(const std::string &body, int color_index) {

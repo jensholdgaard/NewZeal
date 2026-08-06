@@ -82,6 +82,17 @@ struct Chain {
 };
 std::map<std::string, Chain> g_chains;
 
+// Outstanding "GO" cues, keyed by the name that was called. A cue older than one cast is stale:
+// whoever it was for either answered or was skipped, and attributing a 30s latency to the next
+// person who happens to share the name would be worse than reporting nothing.
+std::map<std::string, std::chrono::steady_clock::time_point> g_handoff_cues;
+
+std::string LowerName(const std::string &s) {
+  std::string out = s;
+  for (auto &c : out) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+  return out;
+}
+
 opentelemetry::nostd::shared_ptr<trace_api::Tracer> Tracer() {
   return trace_api::Provider::GetTracerProvider()->GetTracer(kScopeName, kScopeVersion);
 }
@@ -209,6 +220,18 @@ void RecordCompleteHeal(const std::string &caster, const std::string &target, co
       {everquest_semconv::kEverquestZoneName, zone.c_str()},
   };
   if (!g_character.empty()) attrs.push_back({everquest_semconv::kEverquestCharacterName, g_character.c_str()});
+  // If this caster was cued, how long they took to answer it. Consumed either way, so a stale cue
+  // cannot attach itself to a later cast.
+  {
+    auto cue = g_handoff_cues.find(LowerName(caster));
+    if (cue != g_handoff_cues.end()) {
+      const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(now - cue->second).count();
+      if (waited >= 0 && waited <= kCompleteHealCastSeconds * 3 * 1000)
+        attrs.push_back({everquest_semconv::kEverquestHealChainHandoffMs, static_cast<long long>(waited)});
+      g_handoff_cues.erase(cue);
+    }
+  }
+
   // The rotation slot the cleric was assigned. Absent rather than zero when the macro omits it.
   if (chain_position > 0)
     attrs.push_back({everquest_semconv::kEverquestHealChainPosition, chain_position});
@@ -233,9 +256,21 @@ void RecordCompleteHeal(const std::string &caster, const std::string &target, co
   span->End(end);
 }
 
+void NoteChainHandoff(const std::string &next_caster) {
+  if (next_caster.empty()) return;
+  std::lock_guard<std::mutex> lock(g_mutex);
+  g_handoff_cues[LowerName(next_caster)] = std::chrono::steady_clock::now();
+}
+
 void SweepCompleteHealChains() {
   const auto now = std::chrono::steady_clock::now();
   std::lock_guard<std::mutex> lock(g_mutex);
+  for (auto it = g_handoff_cues.begin(); it != g_handoff_cues.end();) {
+    if (now - it->second > std::chrono::seconds(kCompleteHealCastSeconds * 3))
+      it = g_handoff_cues.erase(it);
+    else
+      ++it;
+  }
   for (auto it = g_chains.begin(); it != g_chains.end();) {
     if (now - it->second.last > std::chrono::seconds(kChainIdleSeconds)) {
       if (it->second.span) it->second.span->End();
