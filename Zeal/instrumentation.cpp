@@ -79,6 +79,18 @@ DoubleCounter &FightActiveCounter() {
   return counter;
 }
 
+// Synchronous, unlike the attack and haste gauges: these change on an event rather than being read
+// through an accessor, which is the case the spec points synchronous gauges at.
+using IntGauge = opentelemetry::nostd::unique_ptr<metrics_api::Gauge<int64_t>>;
+
+IntGauge &StatGauge() {
+  static IntGauge gauge = metrics_api::Provider::GetMeterProvider()
+                              ->GetMeter(kScopeName, kScopeVersion)
+                              ->CreateInt64Gauge(everquest_semconv::kEverquestCharacterStatMetric,
+                                                 "character base stat", "1");
+  return gauge;
+}
+
 Counter &HealCounter() {
   static Counter counter = metrics_api::Provider::GetMeterProvider()
                                ->GetMeter(kScopeName, kScopeVersion)
@@ -101,6 +113,9 @@ struct Chain {
   int casts = 0;
 };
 std::map<std::string, Chain> g_chains;
+
+// Last recorded value per stat, so only changes are emitted.
+std::map<std::string, int> g_last_stats;
 
 // Outstanding "GO" cues, keyed by the name that was called. A cue older than one cast is stale:
 // whoever it was for either answered or was skipped, and attributing a 30s latency to the next
@@ -214,6 +229,39 @@ void RecordDamage(const std::string &source, const std::string &source_type, con
   if (!group_leader.empty()) attrs.push_back({everquest_semconv::kEverquestGroupLeader, group_leader.c_str()});
   if (!pet.empty()) attrs.push_back({everquest_semconv::kEverquestCombatPetName, pet.c_str()});
   Add(DamageCounter(), amount, attrs);
+}
+
+void SetCharacterStats(int strength, int stamina, int dexterity, int agility, int wisdom,
+                       int intelligence, int charisma) {
+  const std::pair<const char *, int> stats[] = {
+      {"strength", strength}, {"stamina", stamina},         {"dexterity", dexterity},
+      {"agility", agility},   {"wisdom", wisdom},           {"intelligence", intelligence},
+      {"charisma", charisma},
+  };
+
+  std::string character;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    character = g_character;
+    // Nothing to attribute a stat to yet, and the character is part of every series - recording now
+    // would file these under nobody.
+    if (character.empty()) return;
+  }
+
+  for (const auto &[name, value] : stats) {
+    if (value <= 0) continue;  // not yet sampled
+    {
+      std::lock_guard<std::mutex> lock(g_mutex);
+      auto &last = g_last_stats[name];
+      if (last == value) continue;  // unchanged: the whole point
+      last = value;
+    }
+    Attributes attrs = {
+        {everquest_semconv::kEverquestCharacterStatName, name},
+        {everquest_semconv::kEverquestCharacterName, character.c_str()},
+    };
+    StatGauge()->Record(value, opentelemetry::common::KeyValueIterableView<Attributes>(attrs));
+  }
 }
 
 void RecordFightTotals(const std::string &target, const std::string &zone, double duration_s,

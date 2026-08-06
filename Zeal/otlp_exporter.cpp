@@ -311,9 +311,12 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
       }
       std::lock_guard<std::mutex> lock(snapshot_mutex);
       zeal::instrumentation::SetCharacter(snapshot.in_game ? snapshot.name : std::string());
-      if (snapshot.in_game)
+      if (snapshot.in_game) {
         zeal::instrumentation::SetCharacterState(snapshot.zone, snapshot.attack, snapshot.have_attack,
                                                  snapshot.haste, snapshot.have_haste);
+        zeal::instrumentation::SetCharacterStats(snapshot.str, snapshot.sta, snapshot.dex, snapshot.agi,
+                                                 snapshot.wis, snapshot.intel, snapshot.cha);
+      }
     }
 #endif
   });
@@ -610,6 +613,10 @@ nlohmann::json OtlpExporter::build_resource_attributes() const {
     attrs.push_back(int_attr(everquest_semconv::kEverquestCharacterLevel, s.level));
     attrs.push_back(int_attr(everquest_semconv::kEverquestCharacterDeity, s.deity));
     attrs.push_back(int_attr(everquest_semconv::kEverquestCharacterAaUnspent, s.aa_unspent));
+#ifndef ZEAL_OTEL_SDK
+    // Migrated to a change-driven gauge (see instrumentation.cpp). These cannot live on the Resource
+    // any more: it is fixed for the process, and a stat that changes when you swap gear would either
+    // go stale or force the whole pipeline to be rebuilt.
     attrs.push_back(int_attr("everquest.character.stat.strength", s.str));
     attrs.push_back(int_attr("everquest.character.stat.stamina", s.sta));
     attrs.push_back(int_attr("everquest.character.stat.dexterity", s.dex));
@@ -617,6 +624,7 @@ nlohmann::json OtlpExporter::build_resource_attributes() const {
     attrs.push_back(int_attr("everquest.character.stat.wisdom", s.wis));
     attrs.push_back(int_attr("everquest.character.stat.intelligence", s.intel));
     attrs.push_back(int_attr("everquest.character.stat.charisma", s.cha));
+#endif
   }
   return attrs;
 }

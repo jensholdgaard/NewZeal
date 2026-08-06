@@ -26,6 +26,12 @@ void SetCharacter(const std::string &name);
 void SetCharacterState(const std::string &zone, long long attack, bool have_attack, long long haste,
                        bool have_haste);
 
+// The seven base stats. Recorded only when one actually changes - swapping gear, a buff landing,
+// levelling - because a stat that has not moved is not news, and emitting it on a timer would make
+// "when did this change?" impossible to answer. Safe and cheap to call every tick.
+void SetCharacterStats(int strength, int stamina, int dexterity, int agility, int wisdom,
+                       int intelligence, int charisma);
+
 // Damage dealt or taken. `source_type` distinguishes player/pet/npc; `group_leader` is empty when
 // solo, and is then omitted entirely - an absent attribute is a missing label in Prometheus, which
 // keeps solo play out of group-scoped queries.

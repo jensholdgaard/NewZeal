@@ -19,7 +19,7 @@ inline constexpr const char *kEverquestCharacterLevel = "everquest.character.lev
 
 inline constexpr const char *kEverquestCharacterName = "everquest.character.name";
 
-inline constexpr const char *kEverquestCharacterStat = "everquest.character.stat";
+inline constexpr const char *kEverquestCharacterStatName = "everquest.character.stat.name";
 
 inline constexpr const char *kEverquestChatColor = "everquest.chat.color";
 
@@ -65,6 +65,8 @@ inline constexpr const char *kEverquestZoneName = "everquest.zone.name";
 inline constexpr const char *kEverquestCharacterAttackMetric = "everquest.character.attack";
 
 inline constexpr const char *kEverquestCharacterHasteMetric = "everquest.character.haste";
+
+inline constexpr const char *kEverquestCharacterStatMetric = "everquest.character.stat";
 
 inline constexpr const char *kEverquestCombatDamageMetric = "everquest.combat.damage";
 
