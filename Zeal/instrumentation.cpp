@@ -59,6 +59,26 @@ Counter &DamageCounter() {
   return counter;
 }
 
+// Seconds, as doubles: a fight is not a whole number of seconds and rounding every encounter down
+// would bias every rate upward.
+using DoubleCounter = opentelemetry::nostd::shared_ptr<metrics_api::Counter<double>>;
+
+DoubleCounter &FightDurationCounter() {
+  static DoubleCounter counter = metrics_api::Provider::GetMeterProvider()
+                                     ->GetMeter(kScopeName, kScopeVersion)
+                                     ->CreateDoubleCounter(everquest_semconv::kEverquestFightDurationMetric,
+                                                           "seconds spent fighting a target", "s");
+  return counter;
+}
+
+DoubleCounter &FightActiveCounter() {
+  static DoubleCounter counter = metrics_api::Provider::GetMeterProvider()
+                                     ->GetMeter(kScopeName, kScopeVersion)
+                                     ->CreateDoubleCounter(everquest_semconv::kEverquestFightActiveMetric,
+                                                           "seconds an attacker was dealing damage", "s");
+  return counter;
+}
+
 Counter &HealCounter() {
   static Counter counter = metrics_api::Provider::GetMeterProvider()
                                ->GetMeter(kScopeName, kScopeVersion)
@@ -193,6 +213,35 @@ void RecordDamage(const std::string &source, const std::string &source_type, con
   };
   if (!group_leader.empty()) attrs.push_back({everquest_semconv::kEverquestGroupLeader, group_leader.c_str()});
   Add(DamageCounter(), amount, attrs);
+}
+
+void RecordFightTotals(const std::string &target, const std::string &zone, double duration_s,
+                       const std::vector<std::pair<std::string, double>> &active_seconds_by_source) {
+  if (duration_s <= 0) return;
+  std::string character;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    character = g_character;
+  }
+
+  Attributes fight = {
+      {everquest_semconv::kEverquestCombatTarget, target.c_str()},
+      {everquest_semconv::kEverquestZoneName, zone.c_str()},
+  };
+  if (!character.empty()) fight.push_back({everquest_semconv::kEverquestCharacterName, character.c_str()});
+  FightDurationCounter()->Add(duration_s,
+                              opentelemetry::common::KeyValueIterableView<Attributes>(fight));
+
+  for (const auto &[source, seconds] : active_seconds_by_source) {
+    if (seconds <= 0) continue;
+    Attributes attrs = {
+        {everquest_semconv::kEverquestCombatSource, source.c_str()},
+        {everquest_semconv::kEverquestCombatTarget, target.c_str()},
+        {everquest_semconv::kEverquestZoneName, zone.c_str()},
+    };
+    if (!character.empty()) attrs.push_back({everquest_semconv::kEverquestCharacterName, character.c_str()});
+    FightActiveCounter()->Add(seconds, opentelemetry::common::KeyValueIterableView<Attributes>(attrs));
+  }
 }
 
 void RecordCompleteHeal(const std::string &caster, const std::string &target, const std::string &zone,

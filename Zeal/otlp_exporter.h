@@ -102,10 +102,15 @@ class OtlpExporter {
     std::string display;  // normalized display name, for matching "slain" chat lines
     unsigned long long start_ns = 0, last_ns = 0;
     long long dmg_out = 0, dmg_in = 0;
+    // Per attacker: when they last landed a hit, and how long they have been engaged. This is the
+    // community parser's "Sec" column - the denominator that turns damage into DPS rather than
+    // SDPS, and the reason those two numbers differ for a caster who nukes twice in a long fight.
+    std::map<std::string, std::pair<unsigned long long, double>> attacker_activity;
   };
 
   // Called from the hit event (game thread); opens the fight span on first damage.
-  void note_fight_damage(const std::string &raw_target, bool outgoing, long long dmg);
+  void note_fight_damage(const std::string &raw_target, const std::string &attacker, bool outgoing,
+                         long long dmg);
   // Game-thread tick: zone-session transitions and idle-fight sweep.
   void fight_tick();
   // Ends one active fight into completed_spans. Caller holds no lock (game thread only state).
@@ -130,6 +135,8 @@ class OtlpExporter {
 
   // Fixed start time for cumulative metric streams (set at construction).
   unsigned long long start_time_unix_nano = 0;
+  // Longer than a slow two-hander, short enough that a pause reads as downtime.
+  static constexpr unsigned long long kAttackerIdleNs = 12ULL * 1000000000ULL;
   static constexpr unsigned long long kSeriesIdleMs = 10 * 60 * 1000;  // stop exporting fights idle >10min
 
   struct CombatTotal {

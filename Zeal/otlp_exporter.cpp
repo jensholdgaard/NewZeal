@@ -283,7 +283,7 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
     // when it hits us).
     const bool outgoing = (direction[0] == 'o');
     const std::string mob = outgoing ? raw_tgt : std::string(source->Name);
-    if (!mob.empty()) note_fight_damage(mob, outgoing, damage);
+    if (!mob.empty()) note_fight_damage(mob, src, outgoing, damage);
   });
 
   // Sample live game state on the game thread (MainLoop); the sender thread only ever serializes the
@@ -970,7 +970,8 @@ std::string OtlpExporter::build_metrics_payload() {
 }
 
 
-void OtlpExporter::note_fight_damage(const std::string &raw_target, bool outgoing, long long dmg) {
+void OtlpExporter::note_fight_damage(const std::string &raw_target, const std::string &attacker,
+                                     bool outgoing, long long dmg) {
   const unsigned long long now = now_unix_nano();
   ActiveFight &f = active_fights[raw_target];
   if (f.start_ns == 0) {
@@ -980,6 +981,18 @@ void OtlpExporter::note_fight_damage(const std::string &raw_target, bool outgoin
   }
   f.last_ns = now;
   (outgoing ? f.dmg_out : f.dmg_in) += dmg;
+
+  if (!attacker.empty()) {
+    // Engaged time, accumulated between consecutive hits. A gap longer than kAttackerIdleNs is
+    // downtime rather than slow swings - counting it would flatter a caster who nuked once at the
+    // start and once at the end into looking continuously engaged.
+    auto &entry = f.attacker_activity[attacker];
+    if (entry.first != 0 && now > entry.first) {
+      const unsigned long long gap = now - entry.first;
+      if (gap <= kAttackerIdleNs) entry.second += gap / 1e9;
+    }
+    entry.first = now;
+  }
 }
 
 void OtlpExporter::end_fight(const std::string &key, const char *outcome, unsigned long long end_ns) {
@@ -993,7 +1006,25 @@ void OtlpExporter::end_fight(const std::string &key, const char *outcome, unsign
   sp.name = "fight " + f.display;
   sp.start_ns = f.start_ns;
   sp.end_ns = end_ns ? end_ns : f.last_ns;
-#ifndef ZEAL_OTEL_SDK
+#ifdef ZEAL_OTEL_SDK
+  {
+    // Fight-scoped totals, so damage can be divided by a time that means something: the fight's
+    // duration gives SDPS, each attacker's engaged seconds gives DPS. Both are what the community
+    // parser prints, and matching its arithmetic is the difference between a number people use and
+    // a number people argue with.
+    const unsigned long long finished_ns = end_ns ? end_ns : f.last_ns;
+    const double duration_s = (finished_ns > f.start_ns) ? (finished_ns - f.start_ns) / 1e9 : 0.0;
+    std::vector<std::pair<std::string, double>> active;
+    active.reserve(f.attacker_activity.size());
+    for (const auto &[who, act] : f.attacker_activity) {
+      // A single hit has no measurable span; credit it with one swing so a one-shot kill does not
+      // divide by zero and report an infinite rate.
+      active.emplace_back(who, act.second > 0.0 ? act.second : 1.0);
+    }
+    zeal::instrumentation::RecordFightTotals(key, zone_active, duration_s, active);
+  }
+  (void)sp;
+#else
   sp.str_attrs = {{everquest_semconv::kEverquestCombatTarget, key}, {everquest_semconv::kEverquestZoneName, zone_active}, {"everquest.fight.outcome", outcome}};
   sp.int_attrs = {{"everquest.fight.damage.dealt", f.dmg_out}, {"everquest.fight.damage.taken", f.dmg_in}};
   {
