@@ -653,9 +653,6 @@ bool OtlpExporter::in_combat_scope(const std::string &source) const {
   return false;
 }
 
-#endif
-}
-
 void OtlpExporter::record_combat_damage(const std::string &source, const std::string &source_type,
                                         const std::string &direction, const std::string &type,
                                         const std::string &target, long long amount) {
