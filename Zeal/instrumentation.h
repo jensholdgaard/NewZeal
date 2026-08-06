@@ -31,18 +31,19 @@ void RecordDamage(const std::string &source, const std::string &source_type, con
                   const std::string &damage_type, const std::string &zone, const std::string &target,
                   const std::string &group_leader, long long amount);
 
-// A zone session: the parent of every fight span recorded while you are in that zone, so a trace
-// viewer shows a night's pulls on one timeline instead of one disconnected trace per mob.
-void BeginZoneSession(const std::string &zone);
-void EndZoneSession();
+// A Complete Heal announced by a cleric's macro ("<n> CH - <target> (<caster>)").
+//
+// Each CH is a span of fixed 10s - the cast time - starting at the announcement, so the end is known
+// the moment it begins and no timer is needed. Casts on the same target become children of one chain
+// span, which is the whole point: on a timeline you can see immediately whether the chain overlaps
+// cleanly or leaves the tank uncovered between heals.
+void RecordCompleteHeal(const std::string &caster, const std::string &target, const std::string &zone);
 
-// A completed fight, recorded as a span under the current zone session. `duration_ms` is used to
-// place the span in the past: the fight ended when this is called, so the span covers the window
-// that just closed rather than an instant.
-void RecordFight(const std::string &target, const std::string &zone, const std::string &outcome,
-                 long long damage_dealt, long long damage_taken, unsigned long long duration_ms);
+// Closes chains that have gone quiet, so a chain span does not stay open all night. Called from the
+// game-thread tick.
+void SweepCompleteHealChains();
 
-// Healing delivered or received.
+// Healing delivered or received.// Healing delivered or received.
 void RecordHeal(const std::string &source, const std::string &direction, const std::string &zone,
                 const std::string &group_leader, long long amount);
 

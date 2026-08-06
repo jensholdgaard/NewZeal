@@ -29,6 +29,11 @@
 
 #pragma comment(lib, "winhttp.lib")
 
+#ifdef ZEAL_OTEL_SDK
+// Defined below, next to the chat handling it belongs with.
+static bool parse_ch_announce(const std::string &line, std::string &caster, std::string &target);
+#endif
+
 namespace {
 // OTLP/HTTP JSON encodes 64-bit integer fields (timeUnixNano, AnyValue.intValue) as strings.
 nlohmann::json string_attr(const char *key, const std::string &value) {
@@ -205,6 +210,18 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
   zeal->chat_hook->add_print_chat_callback([this](const char *data, int color_index) {
     if (!is_enabled() || !data) return;
     log(data, color_index);
+#ifdef ZEAL_OTEL_SDK
+    {
+      // Complete Heal chains. The announcement is a cleric's macro line, not a combat message, so it
+      // is read here rather than from the damage packets.
+      std::string ch_caster, ch_target;
+      if (parse_ch_announce(data, ch_caster, ch_target)) {
+        zeal::instrumentation::RecordCompleteHeal(ch_caster, ch_target, current_zone_name());
+        if (debug_hits.load())
+          Zeal::Game::print_chat("OTLP CH: caster=%s target=%s", ch_caster.c_str(), ch_target.c_str());
+      }
+    }
+#endif
     // DoT ticks and heal amounts never fire the hit event and are only messaged to the involved
     // client, so text is the correct (and self-reporting, non-duplicating) channel for them.
     parse_dot_or_heal(data);
@@ -264,6 +281,9 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
   zeal->callbacks->AddGeneric([this]() {
     sample_game_state();
     if (is_enabled()) fight_tick();
+#ifdef ZEAL_OTEL_SDK
+    zeal::instrumentation::SweepCompleteHealChains();
+#endif
 #ifdef ZEAL_OTEL_SDK
     // The providers are built once and live for the process; only the character changes, and it is
     // a measurement attribute now, so keeping it current is a string assignment rather than a
@@ -382,6 +402,39 @@ OtlpExporter::~OtlpExporter() {
   zeal::telemetry::Stop();
 #endif
   client.reset();  // stops and joins the worker before any state it collects from goes away
+}
+
+// Pulls the caster and target out of a Complete Heal announcement.
+//
+// The macro is "/4 <n> - CH - %t (%n)", so the line carries " CH - <target> (<caster>)" somewhere
+// inside whatever channel wrapper the client adds. Matching on the " CH - " marker rather than the
+// whole line keeps this working across channel formats, guild vs custom channel, and the numbering
+// convention each guild uses.
+static bool parse_ch_announce(const std::string &line, std::string &caster, std::string &target) {
+  const size_t marker = line.find(" CH - ");
+  if (marker == std::string::npos) return false;
+  size_t pos = marker + 6;
+
+  // Target runs to the caster parenthesis, the closing quote, or end of line.
+  size_t stop = line.find(" (", pos);
+  const size_t quote = line.find('\'', pos);
+  if (quote != std::string::npos && (stop == std::string::npos || quote < stop)) stop = quote;
+  if (stop == std::string::npos) stop = line.size();
+  target = Zeal::String::trim_and_reduce_spaces(line.substr(pos, stop - pos));
+  if (target.empty()) return false;
+
+  // Caster from the parenthesis when the macro includes it, otherwise from the "<name> tells"
+  // prefix that the client puts on channel lines.
+  const size_t open = line.find(" (", pos);
+  if (open != std::string::npos) {
+    const size_t close = line.find(')', open);
+    if (close != std::string::npos) caster = Zeal::String::trim_and_reduce_spaces(line.substr(open + 2, close - open - 2));
+  }
+  if (caster.empty()) {
+    const size_t tells = line.find(" tells ");
+    if (tells != std::string::npos && tells < marker) caster = Zeal::String::trim_and_reduce_spaces(line.substr(0, tells));
+  }
+  return !caster.empty();
 }
 
 void OtlpExporter::log(const std::string &body, int color_index) {
@@ -873,12 +926,7 @@ void OtlpExporter::end_fight(const std::string &key, const char *outcome, unsign
   sp.name = "fight " + f.display;
   sp.start_ns = f.start_ns;
   sp.end_ns = end_ns ? end_ns : f.last_ns;
-#ifdef ZEAL_OTEL_SDK
-  (void)sp;
-  const unsigned long long finished_ns = end_ns ? end_ns : f.last_ns;
-  const unsigned long long duration_ms = (finished_ns > f.start_ns) ? (finished_ns - f.start_ns) / 1000000ULL : 0;
-  zeal::instrumentation::RecordFight(key, zone_active, outcome, f.dmg_out, f.dmg_in, duration_ms);
-#else
+#ifndef ZEAL_OTEL_SDK
   sp.str_attrs = {{everquest_semconv::kEverquestCombatTarget, key}, {everquest_semconv::kEverquestZoneName, zone_active}, {"everquest.fight.outcome", outcome}};
   sp.int_attrs = {{"everquest.fight.damage.dealt", f.dmg_out}, {"everquest.fight.damage.taken", f.dmg_in}};
   {
@@ -899,11 +947,7 @@ void OtlpExporter::fight_tick() {
       ++it;
       end_fight(key, "zoned", 0);
     }
-#ifdef ZEAL_OTEL_SDK
-    // The SDK owns span identity and parenting now, so there are no ids to mint or thread through.
-    if (!zone_active.empty()) zeal::instrumentation::EndZoneSession();
-    if (!zone.empty()) zeal::instrumentation::BeginZoneSession(zone);
-#else
+#ifndef ZEAL_OTEL_SDK
     if (!zone_active.empty() && zone_start_ns) {  // close the previous zone-session span
       FightSpan sp;
       sp.trace_id = zone_trace_id;

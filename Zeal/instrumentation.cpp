@@ -14,6 +14,8 @@
 #pragma pop_macro("max")
 #pragma pop_macro("min")
 
+#include <chrono>
+#include <map>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -67,8 +69,18 @@ Counter &HealCounter() {
 
 using Attributes = std::vector<std::pair<std::string, opentelemetry::common::AttributeValue>>;
 
-// The open zone-session span. Fights become children of it, so one zone visit is one trace.
-opentelemetry::nostd::shared_ptr<trace_api::Span> g_zone_span;
+// Complete Heal's cast time. The span's whole value is showing whether these fixed windows overlap.
+constexpr int kCompleteHealCastSeconds = 10;
+// A chain is over once no cleric has announced for this long - two missed casts' worth.
+constexpr int kChainIdleSeconds = 25;
+
+// One open chain span per tank being chained. Children hang off it, so a chain is one trace.
+struct Chain {
+  opentelemetry::nostd::shared_ptr<trace_api::Span> span;
+  std::chrono::steady_clock::time_point last;
+  int casts = 0;
+};
+std::map<std::string, Chain> g_chains;
 
 opentelemetry::nostd::shared_ptr<trace_api::Tracer> Tracer() {
   return trace_api::Provider::GetTracerProvider()->GetTracer(kScopeName, kScopeVersion);
@@ -172,52 +184,56 @@ void RecordDamage(const std::string &source, const std::string &source_type, con
   Add(DamageCounter(), amount, attrs);
 }
 
-void BeginZoneSession(const std::string &zone) {
-  EndZoneSession();
-  Attributes attrs = {{everquest_semconv::kEverquestZoneName, zone.c_str()}};
-  std::lock_guard<std::mutex> lock(g_mutex);
-  if (!g_character.empty()) attrs.push_back({everquest_semconv::kEverquestCharacterName, g_character.c_str()});
-  g_zone_span = Tracer()->StartSpan("zone session: " + zone,
-                                    opentelemetry::common::KeyValueIterableView<Attributes>(attrs));
-}
+void RecordCompleteHeal(const std::string &caster, const std::string &target, const std::string &zone) {
+  const auto now = std::chrono::steady_clock::now();
 
-void EndZoneSession() {
   std::lock_guard<std::mutex> lock(g_mutex);
-  if (!g_zone_span) return;
-  g_zone_span->End();
-  g_zone_span = opentelemetry::nostd::shared_ptr<trace_api::Span>();
-}
+  auto &chain = g_chains[target];
+  if (!chain.span) {
+    Attributes chain_attrs = {
+        {everquest_semconv::kEverquestCombatTarget, target.c_str()},
+        {everquest_semconv::kEverquestZoneName, zone.c_str()},
+    };
+    if (!g_character.empty())
+      chain_attrs.push_back({everquest_semconv::kEverquestCharacterName, g_character.c_str()});
+    chain.span = Tracer()->StartSpan("CH chain: " + target,
+                                     opentelemetry::common::KeyValueIterableView<Attributes>(chain_attrs));
+  }
+  chain.last = now;
+  chain.casts++;
 
-void RecordFight(const std::string &target, const std::string &zone, const std::string &outcome,
-                 long long damage_dealt, long long damage_taken, unsigned long long duration_ms) {
   Attributes attrs = {
+      {everquest_semconv::kEverquestCombatSource, caster.c_str()},
       {everquest_semconv::kEverquestCombatTarget, target.c_str()},
       {everquest_semconv::kEverquestZoneName, zone.c_str()},
-      {everquest_semconv::kEverquestFightOutcome, outcome.c_str()},
-      {everquest_semconv::kEverquestFightDamageDealt, damage_dealt},
-      {everquest_semconv::kEverquestFightDamageTaken, damage_taken},
   };
+  if (!g_character.empty()) attrs.push_back({everquest_semconv::kEverquestCharacterName, g_character.c_str()});
 
+  // Start now, end 10s from now. Complete Heal's cast time is fixed, so the span's extent is known
+  // at the announcement - which means it can be emitted immediately instead of held open for ten
+  // seconds waiting for something that is not reported anyway.
   trace_api::StartSpanOptions options;
-  {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    if (!g_character.empty()) attrs.push_back({everquest_semconv::kEverquestCharacterName, g_character.c_str()});
-    if (g_zone_span) options.parent = g_zone_span->GetContext();
-  }
-
-  // The fight is already over when this runs, so the span is placed in the past: the SDK measures
-  // duration from the steady clock, so both ends are offset by how long the fight actually took.
-  const auto now = std::chrono::steady_clock::now();
-  const auto began = now - std::chrono::milliseconds(duration_ms);
-  options.start_steady_time = opentelemetry::common::SteadyTimestamp(began);
-  options.start_system_time = opentelemetry::common::SystemTimestamp(
-      std::chrono::system_clock::now() - std::chrono::milliseconds(duration_ms));
-
-  auto span = Tracer()->StartSpan("fight: " + target,
+  options.parent = chain.span->GetContext();
+  options.start_steady_time = opentelemetry::common::SteadyTimestamp(now);
+  options.start_system_time = opentelemetry::common::SystemTimestamp(std::chrono::system_clock::now());
+  auto span = Tracer()->StartSpan("CH: " + caster,
                                   opentelemetry::common::KeyValueIterableView<Attributes>(attrs), options);
   trace_api::EndSpanOptions end;
-  end.end_steady_time = opentelemetry::common::SteadyTimestamp(now);
+  end.end_steady_time = opentelemetry::common::SteadyTimestamp(now + std::chrono::seconds(kCompleteHealCastSeconds));
   span->End(end);
+}
+
+void SweepCompleteHealChains() {
+  const auto now = std::chrono::steady_clock::now();
+  std::lock_guard<std::mutex> lock(g_mutex);
+  for (auto it = g_chains.begin(); it != g_chains.end();) {
+    if (now - it->second.last > std::chrono::seconds(kChainIdleSeconds)) {
+      if (it->second.span) it->second.span->End();
+      it = g_chains.erase(it);
+    } else {
+      ++it;
+    }
+  }
 }
 
 void RecordHeal(const std::string &source, const std::string &direction, const std::string &zone,
