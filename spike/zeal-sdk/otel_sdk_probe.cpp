@@ -41,6 +41,8 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace otlp = opentelemetry::exporter::otlp;
 namespace metrics_sdk = opentelemetry::sdk::metrics;
@@ -56,6 +58,7 @@ std::shared_ptr<metrics_sdk::MeterProvider> g_provider;
 // every call site, and Shutdown() only exists on the SDK type.
 std::shared_ptr<metrics_api::MeterProvider> g_api_provider;
 opentelemetry::nostd::shared_ptr<metrics_api::Counter<uint64_t>> g_probe_counter;
+opentelemetry::nostd::shared_ptr<metrics_api::Counter<uint64_t>> g_damage_counter;
 
 // Tears down the current provider. Shutdown() flushes what is pending and stops the reader thread;
 // leaving it to the destructor would race the game's own teardown.
@@ -65,6 +68,7 @@ void ShutdownLocked() {
   metrics_api::Provider::SetMeterProvider(std::shared_ptr<metrics_api::MeterProvider>());
   g_api_provider.reset();
   g_probe_counter = opentelemetry::nostd::shared_ptr<metrics_api::Counter<uint64_t>>();
+  g_damage_counter = opentelemetry::nostd::shared_ptr<metrics_api::Counter<uint64_t>>();
   g_provider.reset();
   g_identity.clear();
 }
@@ -92,8 +96,19 @@ bool EnsureProvider(const std::string &character, const std::string &service_ver
     otlp::OtlpHttpMetricExporterOptions options;
     options.url = g_endpoint;
     options.content_type = otlp::HttpRequestContentType::kJson;
-    // Cumulative is what the Prometheus receiver downstream expects; delta would be re-aggregated.
-    options.aggregation_temporality = otlp::PreferredAggregationTemporality::kCumulative;
+    // Delta, deliberately - the collector converts back to cumulative for Prometheus.
+    //
+    // Under cumulative temporality the SDK retains aggregation state across cycles and never
+    // reclaims it, so every mob fought all night stays in memory and is re-exported every cycle.
+    // The C++ SDK caps that at 2000 attribute sets (hard-coded in attributes_hashmap.h; v1.28's
+    // View API exposes no override) and folds everything past it into otel.metric.overflow=true,
+    // which drops `target` and `source` - silently undercounting exactly the target-filtered
+    // queries the dashboard is built on.
+    //
+    // Delta lets the SDK reset state each cycle, so the limit only bounds one cycle's activity.
+    // The eviction the hand-rolled exporter does by hand then lives in the collector's
+    // deltatocumulative processor, which is a better place for it.
+    options.aggregation_temporality = otlp::PreferredAggregationTemporality::kDelta;
 
     // Injected, not built by the Factory - see the note at the top of this file.
     auto transport = std::make_shared<winhttp_client::HttpClient>();
@@ -126,6 +141,11 @@ bool EnsureProvider(const std::string &character, const std::string &service_ver
 
     auto meter = g_provider->GetMeter("zeal.otlp", "1.0.0");
     g_probe_counter = meter->CreateUInt64Counter("everquest.sdk.probe", "probe emitted by the SDK", "1");
+    // Deliberately a different name from the hand-rolled everquest.combat.damage: both run at once
+    // so the two can be diffed in Prometheus, rather than one silently replacing the other.
+    g_damage_counter = meter->CreateUInt64Counter("everquest.sdk.combat.damage",
+                                                  "damage dealt or taken, recorded via the OTel SDK",
+                                                  "{hitpoint}");
     return true;
   } catch (const std::exception &e) {
     error = e.what();
@@ -140,6 +160,27 @@ void Count(long long value) {
   std::lock_guard<std::mutex> lock(g_mutex);
   if (!g_probe_counter) return;
   g_probe_counter->Add(static_cast<uint64_t>(value < 0 ? 0 : value));
+}
+
+void RecordDamage(const std::string &source, const std::string &source_type, const std::string &direction,
+                  const std::string &damage_type, const std::string &zone, const std::string &target,
+                  const std::string &group_leader, long long amount) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (!g_damage_counter || amount <= 0) return;
+  // Attribute names match the hand-rolled exporter's exactly, so a diff in Prometheus compares
+  // values rather than schemas. group.leader is omitted when solo: an absent attribute is a missing
+  // label, which keeps solo play out of group-scoped queries.
+  std::vector<std::pair<std::string, opentelemetry::common::AttributeValue>> attrs = {
+      {"everquest.combat.source", source.c_str()},
+      {"everquest.combat.source.type", source_type.c_str()},
+      {"everquest.combat.direction", direction.c_str()},
+      {"everquest.combat.damage.type", damage_type.c_str()},
+      {"everquest.zone.name", zone.c_str()},
+      {"everquest.combat.target", target.c_str()},
+  };
+  if (!group_leader.empty()) attrs.push_back({"everquest.group.leader", group_leader.c_str()});
+  g_damage_counter->Add(static_cast<uint64_t>(amount),
+                        opentelemetry::common::KeyValueIterableView<decltype(attrs)>(attrs));
 }
 
 void Stop() {

@@ -26,6 +26,12 @@ bool EnsureProvider(const std::string &character, const std::string &service_ver
 // Adds to a counter the SDK owns, so the export path is exercised by real data.
 void Count(long long value);
 
+// Mirrors what the hand-rolled exporter records for combat damage, under a separate metric name so
+// the two can be compared in Prometheus rather than one trusted over the other.
+void RecordDamage(const std::string &source, const std::string &source_type, const std::string &direction,
+                  const std::string &damage_type, const std::string &zone, const std::string &target,
+                  const std::string &group_leader, long long amount);
+
 // Shuts the provider down, which flushes pending exports and stops the reader thread. The game will
 // not wait for a background export on unload.
 void Stop();

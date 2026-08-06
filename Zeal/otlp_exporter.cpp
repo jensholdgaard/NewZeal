@@ -569,6 +569,12 @@ void OtlpExporter::record_combat_damage(const std::string &source, const std::st
                                         const std::string &target, long long amount) {
   const std::string zone = current_zone_name();     // where the hit happened (game thread)
   const std::string group = group_for(source, direction);  // "" unless it is genuinely our group's
+#ifdef ZEAL_OTEL_SDK
+  // Same event, recorded through the SDK under a different metric name, so the two paths can be
+  // compared on identical input instead of one being trusted over the other. No-op until
+  // /otlp sdkprobe has built a provider.
+  zeal_otel_sdk::RecordDamage(source, source_type, direction, type, zone, target, group, amount);
+#endif
   std::lock_guard<std::mutex> lock(metrics_mutex);
   CombatTotal &entry = combat_damage[{source, source_type, direction, type, zone, target, group}];
   entry.total += amount;
