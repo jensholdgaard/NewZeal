@@ -215,3 +215,39 @@ already ships in the collector build the guild runs, so this is configuration, n
 This is the clearest example of the spike's general lesson: the SDK is not a drop-in for a
 hand-rolled exporter whose behaviour was tuned to this workload. Each such behaviour has to be
 re-derived from the SDK's model, and some - like idle eviction - move to a different component.
+
+## Temporality: cumulative, and the spec says so
+
+Briefly changed to delta to bound the SDK's retained state, then reverted after live combat. Both
+the failure and the guidance are worth recording, because the reasoning for delta was superficially
+good.
+
+**What broke.** Under delta the SDK only exports attribute sets with activity in the cycle, so a mob
+killed inside one 10s window produces a single data point. `rate()` needs two points in its window to
+return anything, so those fights contributed **zero** DPS - while totals and the dashboard looked
+healthy. Observed directly: several series with `samples=1` over ten minutes.
+
+**What the docs say** - all of which predates the experiment:
+
+- OTLP Metrics Exporter (Stable): "MUST set temporality preference to Cumulative for all instrument
+  kinds by default."
+- `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` defaults to `cumulative`.
+- Prometheus compatibility: "Prometheus metrics are always cumulative ... the Prometheus exporter
+  enforces cumulative for all instruments."
+- Prometheus Exporter spec (Stable): "MUST set the MetricReader `temporality` ... to be `cumulative`
+  for all instrument kinds."
+
+And the data model names the cost that motivated the change in the first place:
+
+> Cumulative data requires the sender to remember all previous measurements, an "up-front" memory
+> cost proportional to cardinality.
+
+So the retained state is the documented, accepted price of cumulative - not a defect to engineer
+around. Delta plus a collector-side `deltatocumulative` remains a legitimate pattern for genuinely
+large cardinality, but it is the deviation, and it needs the sample-density consequence understood
+before it is chosen.
+
+**The general lesson.** The hand-rolled exporter already did this correctly. The change was made from
+reasoning rather than from the guidance, and the guidance was one search away. Check the spec before
+"improving" a behaviour that already works - especially when the improvement targets a cost the spec
+explicitly names as expected.
