@@ -316,21 +316,36 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                              // runs here - linking proved nothing about runtime. The hand-rolled
                              // exporter above is untouched and keeps running alongside it.
                              if (args.size() == 2 && Zeal::String::compare_insensitive(args[1], "sdkprobe")) {
-                               static bool started = false;
-                               std::string err;
-                               if (!started) {
-                                 const std::string url = setting_endpoint.get() + "/v1/metrics";
-                                 if (!zeal_otel_sdk::Start(url, err)) {
-                                   Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "SDK probe failed to start: %s",
-                                                          err.c_str());
-                                   return true;
-                                 }
-                                 started = true;
-                                 Zeal::Game::print_chat("SDK probe started -> %s", url.c_str());
+                               // The character is part of an immutable Resource, so it has to be
+                               // known before a provider can exist - and a character switch rebuilds
+                               // it rather than mutating it.
+                               std::string character;
+                               {
+                                 std::lock_guard<std::mutex> lock(snapshot_mutex);
+                                 if (snapshot.in_game) character = snapshot.name;
                                }
+                               if (character.empty()) {
+                                 Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE,
+                                                        "SDK probe: not in game yet - the character is part of the "
+                                                        "resource identity, so there is nothing to build against.");
+                                 return true;
+                               }
+
+                               zeal_otel_sdk::Configure(setting_endpoint.get() + "/v1/metrics");
+                               std::string err;
+                               const bool was_running = zeal_otel_sdk::Running();
+                               if (!zeal_otel_sdk::EnsureProvider(character, ZEAL_VERSION "+" ZEAL_BUILD_VERSION,
+                                                                  err)) {
+                                 Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "SDK probe failed to start: %s",
+                                                        err.c_str());
+                                 return true;
+                               }
+                               if (!was_running)
+                                 Zeal::Game::print_chat("SDK probe started for %s -> %s", character.c_str(),
+                                                        setting_endpoint.get().c_str());
                                zeal_otel_sdk::Count(1);
                                Zeal::Game::print_chat(
-                                   "SDK probe: counter incremented. It exports every 2s; look for "
+                                   "SDK probe: counter incremented. It exports every 10s; look for "
                                    "everquest_sdk_probe_total in Prometheus.");
                                return true;
                              }
@@ -371,6 +386,11 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
 }
 
 OtlpExporter::~OtlpExporter() {
+#ifdef ZEAL_OTEL_SDK
+  // Shut the SDK down first: its reader thread would otherwise still be running when this DLL
+  // unloads, exporting from memory that no longer exists.
+  zeal_otel_sdk::Stop();
+#endif
   client.reset();  // stops and joins the worker before any state it collects from goes away
 }
 

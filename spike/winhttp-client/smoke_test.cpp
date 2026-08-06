@@ -124,6 +124,7 @@ static int RunPeriodic(const std::string &endpoint, int seconds) {
   auto resource = opentelemetry::sdk::resource::Resource::Create({
       {"service.name", "everquest"},
       {"service.version", "sdk-probe-periodic"},
+      {"service.instance.id", "smoke-test"},
   });
 
   auto provider = metrics_sdk::MeterProviderFactory::Create(
