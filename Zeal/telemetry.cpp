@@ -100,11 +100,21 @@ bool Start(const std::string &endpoint, const std::string &service_version, std:
     otlp::OtlpHttpMetricExporterOptions metric_options;
     metric_options.url = endpoint + "/v1/metrics";
     metric_options.content_type = otlp::HttpRequestContentType::kJson;
-    // Delta so the SDK can reclaim aggregation state each cycle; the collector's deltatocumulative
-    // rebuilds the cumulative series Prometheus wants, and its max_stale evicts idle fights. Under
-    // cumulative the SDK retains every attribute set until the process exits, hits its 2000-set cap
-    // and folds the rest into otel.metric.overflow - silently dropping target and source.
-    metric_options.aggregation_temporality = otlp::PreferredAggregationTemporality::kDelta;
+    // Cumulative, despite what it costs in retained state - measured against live combat, delta was
+    // worse in a way that matters more.
+    //
+    // Under delta the SDK only exports attribute sets that saw activity in the cycle, so a mob killed
+    // inside one 10s window produces a single point. rate() needs two points in its window to return
+    // anything at all, so those fights contributed *zero* DPS while the dashboard looked healthy.
+    // That is the same silent-undercount failure the cardinality limit would cause, arriving sooner
+    // and on ordinary short fights rather than only on long sessions.
+    //
+    // Cumulative re-exports every attribute set every cycle, which is what keeps rate() well defined
+    // and matches what the hand-rolled exporter did. The cost is that state is never reclaimed: at
+    // 2000 attribute sets the SDK folds the rest into otel.metric.overflow=true, dropping target and
+    // source. That ceiling is monitorable - alert on otel_metric_overflow - whereas a wrong rate() is
+    // not visible at all.
+    metric_options.aggregation_temporality = otlp::PreferredAggregationTemporality::kCumulative;
     auto metric_exporter = std::unique_ptr<metrics_sdk::PushMetricExporter>(
         new otlp::OtlpHttpMetricExporter(metric_options, transport));
 
