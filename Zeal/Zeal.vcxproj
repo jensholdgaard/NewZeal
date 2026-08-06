@@ -196,7 +196,8 @@
     <ClCompile Include="nameplate.cpp" />
     <ClCompile Include="npc_give.cpp" />
     <ClCompile Include="otlp_client.cpp" />
-    <ClCompile Include="..\spike\zeal-sdk\otel_sdk_probe.cpp" Condition="'$(ZEAL_OTEL_SDK)'=='1'" />
+    <ClCompile Include="telemetry.cpp" Condition="'$(ZEAL_OTEL_SDK)'=='1'" />
+    <ClCompile Include="instrumentation.cpp" Condition="'$(ZEAL_OTEL_SDK)'=='1'" />
     <ClCompile Include="..\spike\winhttp-client\winhttp_client.cpp" Condition="'$(ZEAL_OTEL_SDK)'=='1'" />
     <ClCompile Include="otlp_exporter.cpp" />
     <ClCompile Include="page10_binds.cpp" />

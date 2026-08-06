@@ -3,7 +3,8 @@
 #include "everquest_semconv.h"  // generated from the semconv registry (see everquest-semconv/generate.sh)
 
 #ifdef ZEAL_OTEL_SDK
-#include "otel_sdk_probe.h"  // spike only; see spike/zeal-sdk and docs/decisions/otlp-sdk-vs-hand-rolled.md
+#include "instrumentation.h"  // API-only gameplay instrumentation
+#include "telemetry.h"       // SDK setup, this file is the application owner
 #endif
 
 #include <winhttp.h>
@@ -264,21 +265,17 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
     sample_game_state();
     if (is_enabled()) fight_tick();
 #ifdef ZEAL_OTEL_SDK
-    // Keep the SDK provider matched to the current character. Idempotent and cheap when nothing has
-    // changed; when the character does change it rebuilds, because the identity lives in an
-    // immutable Resource. Doing it here means no manual command to start it, and camping to
-    // character select is handled without anyone remembering to.
+    // The providers are built once and live for the process; only the character changes, and it is
+    // a measurement attribute now, so keeping it current is a string assignment rather than a
+    // teardown and rebuild of the whole pipeline.
     if (is_enabled()) {
-      std::string character;
-      {
-        std::lock_guard<std::mutex> lock(snapshot_mutex);
-        if (snapshot.in_game) character = snapshot.name;
-      }
-      if (!character.empty()) {
+      if (!zeal::telemetry::Running()) {
         std::string err;
-        zeal_otel_sdk::Configure(setting_endpoint.get() + "/v1/metrics");
-        zeal_otel_sdk::EnsureProvider(character, ZEAL_VERSION "+" ZEAL_BUILD_VERSION, err);
+        if (!zeal::telemetry::Start(setting_endpoint.get(), ZEAL_VERSION "+" ZEAL_BUILD_VERSION, err))
+          Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "OpenTelemetry failed to start: %s", err.c_str());
       }
+      std::lock_guard<std::mutex> lock(snapshot_mutex);
+      zeal::instrumentation::SetCharacter(snapshot.in_game ? snapshot.name : std::string());
     }
 #endif
   });
@@ -329,42 +326,14 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                                return true;
                              }
 #ifdef ZEAL_OTEL_SDK
-                             // Spike only: start the OpenTelemetry SDK inside the game process and
-                             // push one counter through it, over WinHTTP. Proves the SDK actually
-                             // runs here - linking proved nothing about runtime. The hand-rolled
-                             // exporter above is untouched and keeps running alongside it.
-                             if (args.size() == 2 && Zeal::String::compare_insensitive(args[1], "sdkprobe")) {
-                               // The character is part of an immutable Resource, so it has to be
-                               // known before a provider can exist - and a character switch rebuilds
-                               // it rather than mutating it.
-                               std::string character;
-                               {
-                                 std::lock_guard<std::mutex> lock(snapshot_mutex);
-                                 if (snapshot.in_game) character = snapshot.name;
-                               }
-                               if (character.empty()) {
-                                 Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE,
-                                                        "SDK probe: not in game yet - the character is part of the "
-                                                        "resource identity, so there is nothing to build against.");
-                                 return true;
-                               }
-
-                               zeal_otel_sdk::Configure(setting_endpoint.get() + "/v1/metrics");
-                               std::string err;
-                               const bool was_running = zeal_otel_sdk::Running();
-                               if (!zeal_otel_sdk::EnsureProvider(character, ZEAL_VERSION "+" ZEAL_BUILD_VERSION,
-                                                                  err)) {
-                                 Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "SDK probe failed to start: %s",
-                                                        err.c_str());
-                                 return true;
-                               }
-                               if (!was_running)
-                                 Zeal::Game::print_chat("SDK probe started for %s -> %s", character.c_str(),
-                                                        setting_endpoint.get().c_str());
-                               zeal_otel_sdk::Count(1);
-                               Zeal::Game::print_chat(
-                                   "SDK probe: counter incremented. It exports every 10s; look for "
-                                   "everquest_sdk_probe_total in Prometheus.");
+                             // Reports what the SDK pipeline is doing. The probe command this
+                             // replaces existed to start the SDK by hand; the providers now come up
+                             // with the exporter, so there is nothing left to trigger.
+                             if (args.size() == 2 && Zeal::String::compare_insensitive(args[1], "sdk")) {
+                               Zeal::Game::print_chat("OpenTelemetry SDK: %s",
+                                                      zeal::telemetry::Running() ? "running" : "not started");
+                               Zeal::Game::print_chat("  metrics, logs and traces over WinHTTP -> %s",
+                                                      setting_endpoint.get().c_str());
                                return true;
                              }
 #endif
@@ -405,9 +374,9 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
 
 OtlpExporter::~OtlpExporter() {
 #ifdef ZEAL_OTEL_SDK
-  // Shut the SDK down first: its reader thread would otherwise still be running when this DLL
-  // unloads, exporting from memory that no longer exists.
-  zeal_otel_sdk::Stop();
+  // Shut the SDK down first: the metric reader and batch processors own threads that would
+  // otherwise still be running when this DLL unloads, exporting from memory that no longer exists.
+  zeal::telemetry::Stop();
 #endif
   client.reset();  // stops and joins the worker before any state it collects from goes away
 }
@@ -588,22 +557,27 @@ void OtlpExporter::record_combat_damage(const std::string &source, const std::st
   const std::string zone = current_zone_name();     // where the hit happened (game thread)
   const std::string group = group_for(source, direction);  // "" unless it is genuinely our group's
 #ifdef ZEAL_OTEL_SDK
-  // Same event, recorded through the SDK under a different metric name, so the two paths can be
-  // compared on identical input instead of one being trusted over the other. No-op until
-  // /otlp sdkprobe has built a provider.
-  zeal_otel_sdk::RecordDamage(source, source_type, direction, type, zone, target, group, amount);
-#endif
+  // Migrated: the SDK owns this metric now, so the hand-rolled aggregation below is skipped rather
+  // than run alongside - both emit everquest.combat.damage and would otherwise collide. Parity was
+  // verified against live combat first (12 series, 12 labels, identical values).
+  zeal::instrumentation::RecordDamage(source, source_type, direction, type, zone, target, group, amount);
+#else
   std::lock_guard<std::mutex> lock(metrics_mutex);
   CombatTotal &entry = combat_damage[{source, source_type, direction, type, zone, target, group}];
   entry.total += amount;
   entry.last_ms = GetTickCount64();
+#endif
 }
 
 void OtlpExporter::record_heal(const std::string &source, const std::string &direction, long long amount) {
   const std::string zone = current_zone_name();
   const std::string group = group_for(source, direction);  // "" unless it is genuinely our group's
+#ifdef ZEAL_OTEL_SDK
+  zeal::instrumentation::RecordHeal(source, direction, zone, group, amount);
+#else
   std::lock_guard<std::mutex> lock(metrics_mutex);
   combat_heal[{source, direction, zone, group}] += amount;
+#endif
 }
 
 // Extracts the positive integer that starts at line[pos] (returns 0 if none).

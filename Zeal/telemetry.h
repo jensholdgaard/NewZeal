@@ -1,0 +1,34 @@
+// OpenTelemetry SDK setup - the only place in Zeal that configures telemetry.
+//
+// This is the "application owner" half of OpenTelemetry's API/SDK split: it constructs the
+// providers, exporters and Resource once, and registers them globally. Instrumentation elsewhere in
+// Zeal calls the *API* only (opentelemetry::metrics::Provider::GetMeterProvider(), etc.) and must
+// not include any sdk/ or exporters/ header. Per the client design principles: "Instrumentation
+// authors MUST NOT directly reference any SDK package of any kind, only the API."
+//
+// The practical benefit is not purity. Because the API is a no-op until an SDK is registered,
+// instrumented call sites compile and run whether or not telemetry is built in, so the game code
+// carries no #ifdefs and no null checks.
+#pragma once
+
+#include <string>
+
+namespace zeal::telemetry {
+
+// Configures and registers the global MeterProvider, LoggerProvider and TracerProvider, all
+// exporting OTLP/HTTP to `endpoint` (a base URL; the signal paths are appended) over one shared
+// WinHTTP transport. Safe to call repeatedly - only the first call builds anything.
+//
+// The Resource is fixed for the lifetime of the process, which is what lets instruments be cached
+// at call sites: a Resource is immutable and bound at provider creation, so anything that changes
+// while the game runs - the character, above all - belongs on measurements, not here.
+bool Start(const std::string &endpoint, const std::string &service_version, std::string &error);
+
+// Flushes and shuts down all three providers. Must run before the DLL unloads: the metric reader
+// and the batch processors own threads that would otherwise export from freed memory.
+void Stop();
+
+// True once Start() has succeeded.
+bool Running();
+
+}  // namespace zeal::telemetry
