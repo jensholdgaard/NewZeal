@@ -173,3 +173,45 @@ paths were found and fixed while reasoning from the symptom; both were real, nei
 
 Anything claiming the SDK path works must drive `MeterProvider` -> reader -> exporter, the way the
 game does, for more than one export cycle.
+
+## The constraint that actually shapes an SDK port: cardinality and temporality
+
+Checked against the spec, not assumed. Two SDK behaviours interact badly with this workload:
+
+**A Resource is immutable and bound at MeterProvider creation.** The hand-rolled exporter rebuilds
+resource attributes on every payload - free when writing the JSON yourself. This pipeline carries
+the character in `service.instance.id` (Prometheus promotes it to `instance`), so camping to
+character select is a *different service instance*: the provider must be rebuilt, not mutated.
+
+**Under cumulative temporality the SDK never reclaims aggregation state.** Every attribute set ever
+observed stays resident and is re-exported every cycle:
+
+> With cumulative temporality, the SDK retains state across cycles, so once the limit is reached,
+> new combinations keep overflowing until the process restarts.
+
+The C++ SDK caps this at **2000 attribute sets** (`kAggregationCardinalityLimit`, hard-coded in
+`sdk/metrics/state/attributes_hashmap.h`; v1.28's View API exposes no override) and folds everything
+past it into `otel.metric.overflow=true`. That drops the whole attribute set, including `target` and
+`source`. The damage metric is keyed on a per-mob `target`, so a long raid night can plausibly reach
+2000 - after which target-filtered panels silently undercount while totals still look correct.
+
+`kSeriesIdleMs` eviction in the hand-rolled exporter is therefore not housekeeping. It is what keeps
+a session bounded, and the SDK has no cumulative-mode equivalent.
+
+### Resolution
+
+Export **delta** temporality from the SDK, and convert in the local collector:
+
+```yaml
+processors:
+  deltatocumulative:
+    max_stale: 5m
+```
+
+Delta lets the SDK reset state each cycle, so the 2000 limit bounds one cycle rather than the
+session; `max_stale` performs the idle eviction, in a component designed for it. `deltatocumulative`
+already ships in the collector build the guild runs, so this is configuration, not a redeploy.
+
+This is the clearest example of the spike's general lesson: the SDK is not a drop-in for a
+hand-rolled exporter whose behaviour was tuned to this workload. Each such behaviour has to be
+re-derived from the SDK's model, and some - like idle eviction - move to a different component.
