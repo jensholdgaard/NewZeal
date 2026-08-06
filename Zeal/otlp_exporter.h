@@ -78,7 +78,8 @@ class OtlpExporter {
   // {source, source_type, direction, damage_type, zone, target}. `target` is the raw spawn name
   // (instance digits included, e.g. "a_temple_guard00") so individual mobs are distinguishable.
   void record_combat_damage(const std::string &source, const std::string &source_type, const std::string &direction,
-                            const std::string &type, const std::string &target, long long amount);
+                            const std::string &type, const std::string &target, const std::string &pet,
+                            long long amount);
   // Parses caster-side DoT ticks and heal messages from a chat line (they have no hit event).
   void parse_dot_or_heal(const std::string &line);
   // Parses a raid lockout notice ("... lockout for <target> that expires in <n> Hours.").
