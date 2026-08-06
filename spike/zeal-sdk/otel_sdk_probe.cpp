@@ -52,6 +52,9 @@ std::mutex g_mutex;
 std::string g_endpoint;
 std::string g_identity;  // the character the current provider was built for
 std::shared_ptr<metrics_sdk::MeterProvider> g_provider;
+// The API takes the base-typed pointer; keeping both avoids converting a derived shared_ptr at
+// every call site, and Shutdown() only exists on the SDK type.
+std::shared_ptr<metrics_api::MeterProvider> g_api_provider;
 opentelemetry::nostd::shared_ptr<metrics_api::Counter<uint64_t>> g_probe_counter;
 
 // Tears down the current provider. Shutdown() flushes what is pending and stops the reader thread;
@@ -60,6 +63,7 @@ void ShutdownLocked() {
   if (!g_provider) return;
   g_provider->Shutdown(std::chrono::microseconds(2000000));
   metrics_api::Provider::SetMeterProvider(std::shared_ptr<metrics_api::MeterProvider>());
+  g_api_provider.reset();
   g_probe_counter = opentelemetry::nostd::shared_ptr<metrics_api::Counter<uint64_t>>();
   g_provider.reset();
   g_identity.clear();
@@ -116,7 +120,8 @@ bool EnsureProvider(const std::string &character, const std::string &service_ver
     provider->AddMetricReader(std::move(reader));
 
     g_provider = std::move(provider);
-    metrics_api::Provider::SetMeterProvider(g_provider);
+    g_api_provider = g_provider;
+    metrics_api::Provider::SetMeterProvider(g_api_provider);
     g_identity = character;
 
     auto meter = g_provider->GetMeter("zeal.otlp", "1.0.0");
