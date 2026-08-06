@@ -1,5 +1,7 @@
 #include "instrumentation.h"
 
+#include "everquest_semconv.h"  // generated from the registry: a typo becomes a compile error
+
 // API only - no sdk/ or exporters/ headers. See instrumentation.h.
 #pragma push_macro("min")
 #pragma push_macro("max")
@@ -35,7 +37,7 @@ using Counter = opentelemetry::nostd::shared_ptr<metrics_api::Counter<uint64_t>>
 Counter &DamageCounter() {
   static Counter counter = metrics_api::Provider::GetMeterProvider()
                                ->GetMeter(kScopeName, kScopeVersion)
-                               ->CreateUInt64Counter("everquest.combat.damage",
+                               ->CreateUInt64Counter(everquest_semconv::kEverquestCombatDamageMetric,
                                                      "damage dealt or taken", "{hitpoint}");
   return counter;
 }
@@ -43,7 +45,7 @@ Counter &DamageCounter() {
 Counter &HealCounter() {
   static Counter counter = metrics_api::Provider::GetMeterProvider()
                                ->GetMeter(kScopeName, kScopeVersion)
-                               ->CreateUInt64Counter("everquest.combat.heal",
+                               ->CreateUInt64Counter(everquest_semconv::kEverquestCombatHealMetric,
                                                      "hitpoints restored", "{hitpoint}");
   return counter;
 }
@@ -57,7 +59,7 @@ void Add(Counter &counter, long long amount, Attributes &attrs) {
     std::lock_guard<std::mutex> lock(g_mutex);
     character = g_character;
   }
-  if (!character.empty()) attrs.push_back({"everquest.character.name", character.c_str()});
+  if (!character.empty()) attrs.push_back({everquest_semconv::kEverquestCharacterName, character.c_str()});
   counter->Add(static_cast<uint64_t>(amount),
                opentelemetry::common::KeyValueIterableView<Attributes>(attrs));
 }
@@ -75,25 +77,25 @@ void RecordDamage(const std::string &source, const std::string &source_type, con
                   const std::string &damage_type, const std::string &zone, const std::string &target,
                   const std::string &group_leader, long long amount) {
   Attributes attrs = {
-      {"everquest.combat.source", source.c_str()},
-      {"everquest.combat.source.type", source_type.c_str()},
-      {"everquest.combat.direction", direction.c_str()},
-      {"everquest.combat.damage.type", damage_type.c_str()},
-      {"everquest.zone.name", zone.c_str()},
-      {"everquest.combat.target", target.c_str()},
+      {everquest_semconv::kEverquestCombatSource, source.c_str()},
+      {everquest_semconv::kEverquestCombatSourceType, source_type.c_str()},
+      {everquest_semconv::kEverquestCombatDirection, direction.c_str()},
+      {everquest_semconv::kEverquestCombatDamageType, damage_type.c_str()},
+      {everquest_semconv::kEverquestZoneName, zone.c_str()},
+      {everquest_semconv::kEverquestCombatTarget, target.c_str()},
   };
-  if (!group_leader.empty()) attrs.push_back({"everquest.group.leader", group_leader.c_str()});
+  if (!group_leader.empty()) attrs.push_back({everquest_semconv::kEverquestGroupLeader, group_leader.c_str()});
   Add(DamageCounter(), amount, attrs);
 }
 
 void RecordHeal(const std::string &source, const std::string &direction, const std::string &zone,
                 const std::string &group_leader, long long amount) {
   Attributes attrs = {
-      {"everquest.combat.source", source.c_str()},
-      {"everquest.combat.direction", direction.c_str()},
-      {"everquest.zone.name", zone.c_str()},
+      {everquest_semconv::kEverquestCombatSource, source.c_str()},
+      {everquest_semconv::kEverquestCombatDirection, direction.c_str()},
+      {everquest_semconv::kEverquestZoneName, zone.c_str()},
   };
-  if (!group_leader.empty()) attrs.push_back({"everquest.group.leader", group_leader.c_str()});
+  if (!group_leader.empty()) attrs.push_back({everquest_semconv::kEverquestGroupLeader, group_leader.c_str()});
   Add(HealCounter(), amount, attrs);
 }
 
