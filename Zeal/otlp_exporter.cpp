@@ -276,6 +276,9 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
       }
       std::lock_guard<std::mutex> lock(snapshot_mutex);
       zeal::instrumentation::SetCharacter(snapshot.in_game ? snapshot.name : std::string());
+      if (snapshot.in_game)
+        zeal::instrumentation::SetCharacterState(snapshot.zone, snapshot.attack, snapshot.have_attack,
+                                                 snapshot.haste, snapshot.have_haste);
     }
 #endif
   });
@@ -858,8 +861,12 @@ std::string OtlpExporter::build_metrics_payload() {
       std::lock_guard<std::mutex> lock(snapshot_mutex);
       s = snapshot;
     }
+#ifndef ZEAL_OTEL_SDK
+    // Migrated to asynchronous gauges in instrumentation.cpp: these values sit behind an accessor,
+    // which is the case the spec points at observable instruments for.
     if (s.have_attack) metrics.push_back(gauge_metric(everquest_semconv::kEverquestCharacterAttackMetric, "1", now, s.attack, s.zone));
     if (s.have_haste) metrics.push_back(gauge_metric(everquest_semconv::kEverquestCharacterHasteMetric, "%", now, s.haste, s.zone));
+#endif
 
     // Group roster: one point of value 1 per member, so a dashboard can show who is *in* the group
     // rather than only the subset of it that runs Zeal.

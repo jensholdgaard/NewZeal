@@ -18,6 +18,12 @@ namespace zeal::instrumentation {
 // identifying attributes of a Resource must not change during its lifetime.
 void SetCharacter(const std::string &name);
 
+// Slowly-changing character state, read by the observable gauges when the SDK collects. Called from
+// the game thread; the gauges' callbacks run on the SDK's collection thread and read the snapshot
+// this keeps, so neither touches game memory the other might be freeing.
+void SetCharacterState(const std::string &zone, long long attack, bool have_attack, long long haste,
+                       bool have_haste);
+
 // Damage dealt or taken. `source_type` distinguishes player/pet/npc; `group_leader` is empty when
 // solo, and is then omitted entirely - an absent attribute is a missing label in Prometheus, which
 // keeps solo play out of group-scoped queries.
