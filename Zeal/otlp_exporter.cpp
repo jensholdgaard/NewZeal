@@ -31,7 +31,8 @@
 
 #ifdef ZEAL_OTEL_SDK
 // Defined below, next to the chat handling it belongs with.
-static bool parse_ch_announce(const std::string &line, std::string &caster, std::string &target);
+static bool parse_ch_announce(const std::string &line, std::string &caster, std::string &target,
+                              int &mana_percent);
 #endif
 
 namespace {
@@ -215,10 +216,12 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
       // Complete Heal chains. The announcement is a cleric's macro line, not a combat message, so it
       // is read here rather than from the damage packets.
       std::string ch_caster, ch_target;
-      if (parse_ch_announce(data, ch_caster, ch_target)) {
-        zeal::instrumentation::RecordCompleteHeal(ch_caster, ch_target, current_zone_name());
+      int ch_mana = -1;
+      if (parse_ch_announce(data, ch_caster, ch_target, ch_mana)) {
+        zeal::instrumentation::RecordCompleteHeal(ch_caster, ch_target, current_zone_name(), ch_mana);
         if (debug_hits.load())
-          Zeal::Game::print_chat("OTLP CH: caster=%s target=%s", ch_caster.c_str(), ch_target.c_str());
+          Zeal::Game::print_chat("OTLP CH: caster=%s target=%s mana=%i%%", ch_caster.c_str(),
+                                 ch_target.c_str(), ch_mana);
       }
     }
 #endif
@@ -404,18 +407,19 @@ OtlpExporter::~OtlpExporter() {
   client.reset();  // stops and joins the worker before any state it collects from goes away
 }
 
-// Pulls the caster and target out of a Complete Heal announcement.
+// Pulls the caster, target and reported mana out of a Complete Heal announcement.
 //
-// The macro is "/4 <n> - CH - %t (%n)", so the line carries " CH - <target> (<caster>)" somewhere
-// inside whatever channel wrapper the client adds. Matching on the " CH - " marker rather than the
-// whole line keeps this working across channel formats, guild vs custom channel, and the numbering
-// convention each guild uses.
-static bool parse_ch_announce(const std::string &line, std::string &caster, std::string &target) {
+// The macro is "/4 <n> - CH - %t (%n)", where the parenthesised value is the caster's *mana*, not
+// their name - so the caster has to come from the channel line's speaker prefix. Matching on the
+// " CH - " marker rather than the whole line keeps this working across channel formats and whatever
+// numbering convention a guild puts in front.
+static bool parse_ch_announce(const std::string &line, std::string &caster, std::string &target,
+                              int &mana_percent) {
   const size_t marker = line.find(" CH - ");
   if (marker == std::string::npos) return false;
-  size_t pos = marker + 6;
+  const size_t pos = marker + 6;
 
-  // Target runs to the caster parenthesis, the closing quote, or end of line.
+  // Target runs to the mana parenthesis, the closing quote, or end of line.
   size_t stop = line.find(" (", pos);
   const size_t quote = line.find('\'', pos);
   if (quote != std::string::npos && (stop == std::string::npos || quote < stop)) stop = quote;
@@ -423,17 +427,22 @@ static bool parse_ch_announce(const std::string &line, std::string &caster, std:
   target = Zeal::String::trim_and_reduce_spaces(line.substr(pos, stop - pos));
   if (target.empty()) return false;
 
-  // Caster from the parenthesis when the macro includes it, otherwise from the "<name> tells"
-  // prefix that the client puts on channel lines.
+  mana_percent = -1;
   const size_t open = line.find(" (", pos);
   if (open != std::string::npos) {
     const size_t close = line.find(')', open);
-    if (close != std::string::npos) caster = Zeal::String::trim_and_reduce_spaces(line.substr(open + 2, close - open - 2));
+    if (close != std::string::npos) {
+      int parsed = 0;
+      if (Zeal::String::tryParse(Zeal::String::trim_and_reduce_spaces(line.substr(open + 2, close - open - 2)),
+                                 &parsed, true))
+        mana_percent = parsed;  // 0-100; validated where it is recorded
+    }
   }
-  if (caster.empty()) {
-    const size_t tells = line.find(" tells ");
-    if (tells != std::string::npos && tells < marker) caster = Zeal::String::trim_and_reduce_spaces(line.substr(0, tells));
-  }
+
+  // The speaker prefix the client adds to channel lines: "<name> tells ...".
+  const size_t tells = line.find(" tells ");
+  if (tells != std::string::npos && tells < marker)
+    caster = Zeal::String::trim_and_reduce_spaces(line.substr(0, tells));
   return !caster.empty();
 }
 

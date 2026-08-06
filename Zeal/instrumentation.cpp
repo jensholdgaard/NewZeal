@@ -184,7 +184,8 @@ void RecordDamage(const std::string &source, const std::string &source_type, con
   Add(DamageCounter(), amount, attrs);
 }
 
-void RecordCompleteHeal(const std::string &caster, const std::string &target, const std::string &zone) {
+void RecordCompleteHeal(const std::string &caster, const std::string &target, const std::string &zone,
+                        int caster_mana_percent) {
   const auto now = std::chrono::steady_clock::now();
 
   std::lock_guard<std::mutex> lock(g_mutex);
@@ -208,6 +209,10 @@ void RecordCompleteHeal(const std::string &caster, const std::string &target, co
       {everquest_semconv::kEverquestZoneName, zone.c_str()},
   };
   if (!g_character.empty()) attrs.push_back({everquest_semconv::kEverquestCharacterName, g_character.c_str()});
+  // Out of range means the macro did not report it, or reported something that is not a percentage;
+  // an absent attribute beats a fabricated number that a chart would happily plot.
+  if (caster_mana_percent >= 0 && caster_mana_percent <= 100)
+    attrs.push_back({everquest_semconv::kEverquestHealCasterManaPercent, caster_mana_percent});
 
   // Start now, end 10s from now. Complete Heal's cast time is fixed, so the span's extent is known
   // at the announcement - which means it can be emitted immediately instead of held open for ten

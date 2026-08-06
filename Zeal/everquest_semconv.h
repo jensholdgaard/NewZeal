@@ -43,6 +43,8 @@ inline constexpr const char *kEverquestFightOutcome = "everquest.fight.outcome";
 
 inline constexpr const char *kEverquestGroupLeader = "everquest.group.leader";
 
+inline constexpr const char *kEverquestHealCasterManaPercent = "everquest.heal.caster.mana.percent";
+
 inline constexpr const char *kEverquestRaidTarget = "everquest.raid.target";
 
 inline constexpr const char *kEverquestSpellName = "everquest.spell.name";

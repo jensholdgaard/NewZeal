@@ -31,13 +31,14 @@ void RecordDamage(const std::string &source, const std::string &source_type, con
                   const std::string &damage_type, const std::string &zone, const std::string &target,
                   const std::string &group_leader, long long amount);
 
-// A Complete Heal announced by a cleric's macro ("<n> CH - <target> (<caster>)").
+// A Complete Heal announced by a cleric's macro ("<n> CH - <target> (<mana %>)").
 //
 // Each CH is a span of fixed 10s - the cast time - starting at the announcement, so the end is known
 // the moment it begins and no timer is needed. Casts on the same target become children of one chain
 // span, which is the whole point: on a timeline you can see immediately whether the chain overlaps
 // cleanly or leaves the tank uncovered between heals.
-void RecordCompleteHeal(const std::string &caster, const std::string &target, const std::string &zone);
+void RecordCompleteHeal(const std::string &caster, const std::string &target, const std::string &zone,
+                        int caster_mana_percent);
 
 // Closes chains that have gone quiet, so a chain span does not stay open all night. Called from the
 // game-thread tick.
