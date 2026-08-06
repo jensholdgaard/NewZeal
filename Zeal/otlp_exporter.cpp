@@ -32,7 +32,7 @@
 #ifdef ZEAL_OTEL_SDK
 // Defined below, next to the chat handling it belongs with.
 static bool parse_ch_announce(const std::string &line, std::string &caster, std::string &target,
-                              int &mana_percent);
+                              int &position, int &mana_percent);
 #endif
 
 namespace {
@@ -216,11 +216,11 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
       // Complete Heal chains. The announcement is a cleric's macro line, not a combat message, so it
       // is read here rather than from the damage packets.
       std::string ch_caster, ch_target;
-      int ch_mana = -1;
-      if (parse_ch_announce(data, ch_caster, ch_target, ch_mana)) {
-        zeal::instrumentation::RecordCompleteHeal(ch_caster, ch_target, current_zone_name(), ch_mana);
+      int ch_mana = -1, ch_pos = -1;
+      if (parse_ch_announce(data, ch_caster, ch_target, ch_pos, ch_mana)) {
+        zeal::instrumentation::RecordCompleteHeal(ch_caster, ch_target, current_zone_name(), ch_pos, ch_mana);
         if (debug_hits.load())
-          Zeal::Game::print_chat("OTLP CH: caster=%s target=%s mana=%i%%", ch_caster.c_str(),
+          Zeal::Game::print_chat("OTLP CH%i: caster=%s target=%s mana=%i%%", ch_pos, ch_caster.c_str(),
                                  ch_target.c_str(), ch_mana);
       }
     }
@@ -414,7 +414,7 @@ OtlpExporter::~OtlpExporter() {
 // " CH - " marker rather than the whole line keeps this working across channel formats and whatever
 // numbering convention a guild puts in front.
 static bool parse_ch_announce(const std::string &line, std::string &caster, std::string &target,
-                              int &mana_percent) {
+                              int &position, int &mana_percent) {
   const size_t marker = line.find(" CH - ");
   if (marker == std::string::npos) return false;
   const size_t pos = marker + 6;
@@ -426,6 +426,25 @@ static bool parse_ch_announce(const std::string &line, std::string &caster, std:
   if (stop == std::string::npos) stop = line.size();
   target = Zeal::String::trim_and_reduce_spaces(line.substr(pos, stop - pos));
   if (target.empty()) return false;
+
+  // The rotation slot is whatever number sits immediately before the marker: "1 - CH - ...".
+  // Scanning back from the marker rather than anchoring to the line start keeps it independent of
+  // the channel prefix the client puts in front.
+  position = -1;
+  {
+    size_t scan = marker;
+    while (scan > 0 && !isdigit(static_cast<unsigned char>(line[scan - 1]))) {
+      const char c = line[scan - 1];
+      if (c != ' ' && c != '-') break;  // only whitespace and the dash may sit between
+      scan--;
+    }
+    size_t digits_end = scan;
+    while (scan > 0 && isdigit(static_cast<unsigned char>(line[scan - 1]))) scan--;
+    if (digits_end > scan) {
+      int parsed = 0;
+      if (Zeal::String::tryParse(line.substr(scan, digits_end - scan), &parsed, true)) position = parsed;
+    }
+  }
 
   mana_percent = -1;
   const size_t open = line.find(" (", pos);

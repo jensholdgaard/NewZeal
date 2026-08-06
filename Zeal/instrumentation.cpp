@@ -185,7 +185,7 @@ void RecordDamage(const std::string &source, const std::string &source_type, con
 }
 
 void RecordCompleteHeal(const std::string &caster, const std::string &target, const std::string &zone,
-                        int caster_mana_percent) {
+                        int chain_position, int caster_mana_percent) {
   const auto now = std::chrono::steady_clock::now();
 
   std::lock_guard<std::mutex> lock(g_mutex);
@@ -209,6 +209,9 @@ void RecordCompleteHeal(const std::string &caster, const std::string &target, co
       {everquest_semconv::kEverquestZoneName, zone.c_str()},
   };
   if (!g_character.empty()) attrs.push_back({everquest_semconv::kEverquestCharacterName, g_character.c_str()});
+  // The rotation slot the cleric was assigned. Absent rather than zero when the macro omits it.
+  if (chain_position > 0)
+    attrs.push_back({everquest_semconv::kEverquestHealChainPosition, chain_position});
   // Out of range means the macro did not report it, or reported something that is not a percentage;
   // an absent attribute beats a fabricated number that a chart would happily plot.
   if (caster_mana_percent >= 0 && caster_mana_percent <= 100)
@@ -221,7 +224,9 @@ void RecordCompleteHeal(const std::string &caster, const std::string &target, co
   options.parent = chain.span->GetContext();
   options.start_steady_time = opentelemetry::common::SteadyTimestamp(now);
   options.start_system_time = opentelemetry::common::SystemTimestamp(std::chrono::system_clock::now());
-  auto span = Tracer()->StartSpan("CH: " + caster,
+  const std::string span_name =
+      chain_position > 0 ? ("CH" + std::to_string(chain_position) + ": " + caster) : ("CH: " + caster);
+  auto span = Tracer()->StartSpan(span_name,
                                   opentelemetry::common::KeyValueIterableView<Attributes>(attrs), options);
   trace_api::EndSpanOptions end;
   end.end_steady_time = opentelemetry::common::SteadyTimestamp(now + std::chrono::seconds(kCompleteHealCastSeconds));

@@ -38,7 +38,7 @@ void RecordDamage(const std::string &source, const std::string &source_type, con
 // span, which is the whole point: on a timeline you can see immediately whether the chain overlaps
 // cleanly or leaves the tank uncovered between heals.
 void RecordCompleteHeal(const std::string &caster, const std::string &target, const std::string &zone,
-                        int caster_mana_percent);
+                        int chain_position, int caster_mana_percent);
 
 // Closes chains that have gone quiet, so a chain span does not stay open all night. Called from the
 // game-thread tick.
