@@ -107,7 +107,9 @@ static int RunPeriodic(const std::string &endpoint, int seconds) {
   otlp::OtlpHttpMetricExporterOptions options;
   options.url = endpoint;
   options.content_type = otlp::HttpRequestContentType::kJson;
-  options.aggregation_temporality = otlp::PreferredAggregationTemporality::kCumulative;
+  // Delta, matching the in-game path: the collector's deltatocumulative rebuilds the cumulative
+  // series Prometheus wants, and this test is what verifies that conversion actually happens.
+  options.aggregation_temporality = otlp::PreferredAggregationTemporality::kDelta;
 
   // Inject our transport rather than going through the Factory, which reaches for a default HTTP
   // backend that does not exist in this configuration and kills the process.
