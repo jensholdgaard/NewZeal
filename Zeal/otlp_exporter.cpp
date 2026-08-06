@@ -263,6 +263,24 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
   zeal->callbacks->AddGeneric([this]() {
     sample_game_state();
     if (is_enabled()) fight_tick();
+#ifdef ZEAL_OTEL_SDK
+    // Keep the SDK provider matched to the current character. Idempotent and cheap when nothing has
+    // changed; when the character does change it rebuilds, because the identity lives in an
+    // immutable Resource. Doing it here means no manual command to start it, and camping to
+    // character select is handled without anyone remembering to.
+    if (is_enabled()) {
+      std::string character;
+      {
+        std::lock_guard<std::mutex> lock(snapshot_mutex);
+        if (snapshot.in_game) character = snapshot.name;
+      }
+      if (!character.empty()) {
+        std::string err;
+        zeal_otel_sdk::Configure(setting_endpoint.get() + "/v1/metrics");
+        zeal_otel_sdk::EnsureProvider(character, ZEAL_VERSION "+" ZEAL_BUILD_VERSION, err);
+      }
+    }
+#endif
   });
 
   zeal->commands_hook->Add("/otlp", {},
