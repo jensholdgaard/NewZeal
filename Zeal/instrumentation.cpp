@@ -39,6 +39,12 @@ std::string g_character;
 // accessor, so it is observed when the SDK asks rather than polled on a timer of our own.
 struct CharacterState {
   std::string zone;
+  // Base stats, observed rather than pushed: the synchronous Gauge the spec would point at here is
+  // gated behind OPENTELEMETRY_ABI_VERSION_NO >= 2, a preview ABI, and moving every instrument in a
+  // client other people run onto unstable interfaces is not worth the distinction. A gauge sampled
+  // on the export interval still shows a clean step when gear changes, which is the question worth
+  // asking of a stat.
+  int stats[7] = {0, 0, 0, 0, 0, 0, 0};
   long long attack = 0;
   long long haste = 0;
   bool have_attack = false;
@@ -79,18 +85,6 @@ DoubleCounter &FightActiveCounter() {
   return counter;
 }
 
-// Synchronous, unlike the attack and haste gauges: these change on an event rather than being read
-// through an accessor, which is the case the spec points synchronous gauges at.
-using IntGauge = opentelemetry::nostd::unique_ptr<metrics_api::Gauge<int64_t>>;
-
-IntGauge &StatGauge() {
-  static IntGauge gauge = metrics_api::Provider::GetMeterProvider()
-                              ->GetMeter(kScopeName, kScopeVersion)
-                              ->CreateInt64Gauge(everquest_semconv::kEverquestCharacterStatMetric,
-                                                 "character base stat", "1");
-  return gauge;
-}
-
 Counter &HealCounter() {
   static Counter counter = metrics_api::Provider::GetMeterProvider()
                                ->GetMeter(kScopeName, kScopeVersion)
@@ -114,8 +108,6 @@ struct Chain {
 };
 std::map<std::string, Chain> g_chains;
 
-// Last recorded value per stat, so only changes are emitted.
-std::map<std::string, int> g_last_stats;
 
 // Outstanding "GO" cues, keyed by the name that was called. A cue older than one cast is stale:
 // whoever it was for either answered or was skipped, and attributing a 30s latency to the next
@@ -156,6 +148,30 @@ void ObserveGauge(opentelemetry::metrics::ObserverResult result, bool haste) {
                     opentelemetry::common::KeyValueIterableView<Attributes>(attrs));
 }
 
+constexpr const char *kStatNames[7] = {"strength", "stamina",      "dexterity", "agility",
+                                       "wisdom",   "intelligence", "charisma"};
+
+void StatCallback(opentelemetry::metrics::ObserverResult result, void *) {
+  CharacterState state;
+  std::string character;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    state = g_state;
+    character = g_character;
+  }
+  if (!state.valid || character.empty()) return;
+  auto observer = opentelemetry::nostd::get<
+      opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObserverResultT<int64_t>>>(result);
+  for (int i = 0; i < 7; ++i) {
+    if (state.stats[i] <= 0) continue;  // not sampled yet
+    Attributes attrs = {
+        {everquest_semconv::kEverquestCharacterStatName, kStatNames[i]},
+        {everquest_semconv::kEverquestCharacterName, character.c_str()},
+    };
+    observer->Observe(state.stats[i], opentelemetry::common::KeyValueIterableView<Attributes>(attrs));
+  }
+}
+
 void AttackCallback(opentelemetry::metrics::ObserverResult result, void *) { ObserveGauge(result, false); }
 void HasteCallback(opentelemetry::metrics::ObserverResult result, void *) { ObserveGauge(result, true); }
 
@@ -178,8 +194,17 @@ void EnsureGauges() {
     g->AddCallback(HasteCallback, nullptr);
     return g;
   }();
+  static auto stats = [] {
+    auto g = metrics_api::Provider::GetMeterProvider()
+                 ->GetMeter(kScopeName, kScopeVersion)
+                 ->CreateInt64ObservableGauge(everquest_semconv::kEverquestCharacterStatMetric,
+                                              "character base stat", "1");
+    g->AddCallback(StatCallback, nullptr);
+    return g;
+  }();
   (void)attack;
   (void)haste;
+  (void)stats;
 }
 
 void Add(Counter &counter, long long amount, Attributes &attrs) {
@@ -233,35 +258,11 @@ void RecordDamage(const std::string &source, const std::string &source_type, con
 
 void SetCharacterStats(int strength, int stamina, int dexterity, int agility, int wisdom,
                        int intelligence, int charisma) {
-  const std::pair<const char *, int> stats[] = {
-      {"strength", strength}, {"stamina", stamina},         {"dexterity", dexterity},
-      {"agility", agility},   {"wisdom", wisdom},           {"intelligence", intelligence},
-      {"charisma", charisma},
-  };
-
-  std::string character;
-  {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    character = g_character;
-    // Nothing to attribute a stat to yet, and the character is part of every series - recording now
-    // would file these under nobody.
-    if (character.empty()) return;
-  }
-
-  for (const auto &[name, value] : stats) {
-    if (value <= 0) continue;  // not yet sampled
-    {
-      std::lock_guard<std::mutex> lock(g_mutex);
-      auto &last = g_last_stats[name];
-      if (last == value) continue;  // unchanged: the whole point
-      last = value;
-    }
-    Attributes attrs = {
-        {everquest_semconv::kEverquestCharacterStatName, name},
-        {everquest_semconv::kEverquestCharacterName, character.c_str()},
-    };
-    StatGauge()->Record(value, opentelemetry::common::KeyValueIterableView<Attributes>(attrs));
-  }
+  EnsureGauges();
+  std::lock_guard<std::mutex> lock(g_mutex);
+  const int values[7] = {strength, stamina, dexterity, agility, wisdom, intelligence, charisma};
+  for (int i = 0; i < 7; ++i) g_state.stats[i] = values[i];
+  g_state.valid = true;
 }
 
 void RecordFightTotals(const std::string &target, const std::string &zone, double duration_s,
