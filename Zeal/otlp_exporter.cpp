@@ -930,7 +930,29 @@ std::string OtlpExporter::build_metrics_payload() {
 
   // Healing counter (cumulative monotonic Sum), keyed by {source, direction}.
   nlohmann::json heal_points = nlohmann::json::array();
+  {
+    std::lock_guard<std::mutex> lock(metrics_mutex);
+    for (const auto &[key, total] : combat_heal) {
+      nlohmann::json attrs =
+          nlohmann::json::array({string_attr(everquest_semconv::kEverquestCombatSource, std::get<0>(key)),
+                                 string_attr(everquest_semconv::kEverquestCombatDirection, std::get<1>(key)),
+                                 string_attr(everquest_semconv::kEverquestZoneName, std::get<2>(key))});
+      if (!std::get<3>(key).empty())
+        attrs.push_back(string_attr(everquest_semconv::kEverquestGroupLeader, std::get<3>(key)));
+      heal_points.push_back({{"attributes", attrs},
+                             {"startTimeUnixNano", start},
+                             {"timeUnixNano", now},
+                             {"asInt", std::to_string(total)}});
+    }
   }
+  if (!heal_points.empty()) {
+    nlohmann::json metric;
+    metric["name"] = everquest_semconv::kEverquestCombatHealMetric;
+    metric["unit"] = "{hitpoint}";
+    metric["sum"] = {{"dataPoints", heal_points}, {"aggregationTemporality", 2}, {"isMonotonic", true}};
+    metrics.push_back(metric);
+  }
+
 
   if (metrics.empty()) return "";
 
