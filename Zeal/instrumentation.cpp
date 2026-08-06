@@ -202,7 +202,7 @@ void SetCharacterState(const std::string &zone, long long attack, bool have_atta
 
 void RecordDamage(const std::string &source, const std::string &source_type, const std::string &direction,
                   const std::string &damage_type, const std::string &zone, const std::string &target,
-                  const std::string &group_leader, long long amount) {
+                  const std::string &group_leader, const std::string &pet, long long amount) {
   Attributes attrs = {
       {everquest_semconv::kEverquestCombatSource, source.c_str()},
       {everquest_semconv::kEverquestCombatSourceType, source_type.c_str()},
@@ -212,6 +212,7 @@ void RecordDamage(const std::string &source, const std::string &source_type, con
       {everquest_semconv::kEverquestCombatTarget, target.c_str()},
   };
   if (!group_leader.empty()) attrs.push_back({everquest_semconv::kEverquestGroupLeader, group_leader.c_str()});
+  if (!pet.empty()) attrs.push_back({everquest_semconv::kEverquestCombatPetName, pet.c_str()});
   Add(DamageCounter(), amount, attrs);
 }
 

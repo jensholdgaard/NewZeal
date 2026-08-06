@@ -29,9 +29,11 @@ void SetCharacterState(const std::string &zone, long long attack, bool have_atta
 // Damage dealt or taken. `source_type` distinguishes player/pet/npc; `group_leader` is empty when
 // solo, and is then omitted entirely - an absent attribute is a missing label in Prometheus, which
 // keeps solo play out of group-scoped queries.
+// `source` is the owner even when a pet swung - that is how raiders count, and how the parser they
+// compare against reports it. `pet` names the pet underneath, empty when the owner swung themselves.
 void RecordDamage(const std::string &source, const std::string &source_type, const std::string &direction,
                   const std::string &damage_type, const std::string &zone, const std::string &target,
-                  const std::string &group_leader, long long amount);
+                  const std::string &group_leader, const std::string &pet, long long amount);
 
 // A Complete Heal announced by a cleric's macro ("<n> CH - <target> (<mana %>)").
 //

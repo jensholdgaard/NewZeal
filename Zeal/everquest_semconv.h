@@ -27,6 +27,8 @@ inline constexpr const char *kEverquestCombatDamageType = "everquest.combat.dama
 
 inline constexpr const char *kEverquestCombatDirection = "everquest.combat.direction";
 
+inline constexpr const char *kEverquestCombatPetName = "everquest.combat.pet.name";
+
 inline constexpr const char *kEverquestCombatSource = "everquest.combat.source";
 
 inline constexpr const char *kEverquestCombatSourceType = "everquest.combat.source_type";

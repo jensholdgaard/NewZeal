@@ -247,9 +247,13 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                                                  short damage, char) {
     if (!is_enabled() || !source || damage <= 0) return;
     Zeal::GameStructures::Entity *attacker = source;
+    std::string pet_name;  // kept alongside the owner rather than replaced by it
     if (attacker->PetOwnerSpawnId != 0) {  // credit a pet's damage to its owner (charmed or summoned)
       auto *owner = ZealService::get_instance()->entity_manager->Get(attacker->PetOwnerSpawnId);
-      if (owner) attacker = owner;
+      if (owner) {
+        pet_name = attacker->Name;
+        attacker = owner;
+      }
     }
     std::string src = attacker->Name;
     const char *src_type = (attacker->Type == Zeal::GameEnums::EntityTypes::Player) ? "player" : "npc";
@@ -278,7 +282,8 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
     // scope=self dropped its own damage taken, which is precisely the number a raid wants next to
     // healing received.
     const bool incoming = (direction[0] == 'i');
-    if (incoming || in_combat_scope(src)) record_combat_damage(src, src_type, direction, dtype, tgt, damage);
+    if (incoming || in_combat_scope(src))
+      record_combat_damage(src, src_type, direction, dtype, tgt, pet_name, damage);
     // Fight spans: track encounters with NPCs (the mob is the target when we hit it, the source
     // when it hits us).
     const bool outgoing = (direction[0] == 'o');
@@ -655,14 +660,15 @@ bool OtlpExporter::in_combat_scope(const std::string &source) const {
 
 void OtlpExporter::record_combat_damage(const std::string &source, const std::string &source_type,
                                         const std::string &direction, const std::string &type,
-                                        const std::string &target, long long amount) {
+                                        const std::string &target, const std::string &pet,
+                                        long long amount) {
   const std::string zone = current_zone_name();     // where the hit happened (game thread)
   const std::string group = group_for(source, direction);  // "" unless it is genuinely our group's
 #ifdef ZEAL_OTEL_SDK
   // Migrated: the SDK owns this metric now, so the hand-rolled aggregation below is skipped rather
   // than run alongside - both emit everquest.combat.damage and would otherwise collide. Parity was
   // verified against live combat first (12 series, 12 labels, identical values).
-  zeal::instrumentation::RecordDamage(source, source_type, direction, type, zone, target, group, amount);
+  zeal::instrumentation::RecordDamage(source, source_type, direction, type, zone, target, group, pet, amount);
 #else
   std::lock_guard<std::mutex> lock(metrics_mutex);
   CombatTotal &entry = combat_damage[{source, source_type, direction, type, zone, target, group}];
@@ -728,7 +734,7 @@ void OtlpExporter::parse_dot_or_heal(const std::string &line) {
     const bool claimed = !ds_pending_target.empty() && ds_pending_target == ds_target &&
                          GetTickCount64() - ds_pending_ms < 1000;
     if (claimed) {
-      record_combat_damage(self, "player", "outgoing", "damage_shield", ds_pending_target, ds_pending_amount);
+      record_combat_damage(self, "player", "outgoing", "damage_shield", ds_pending_target, "", ds_pending_amount);
     }
     if (debug_hits.load()) {
       // Shields take the text path, so without this `/otlp debug` would stay silent for them and a
@@ -769,14 +775,14 @@ void OtlpExporter::parse_dot_or_heal(const std::string &line) {
       if (rest.rfind("your ", 0) == 0) {
         if (debug_hits.load())
           Zeal::Game::print_chat("[otlp] dot %s -> %s dmg=%lld", self, dot_target.c_str(), amount);
-        record_combat_damage(self, "player", "outgoing", "dot", dot_target, amount);
+        record_combat_damage(self, "player", "outgoing", "dot", dot_target, "", amount);
       } else {
         size_t apos = rest.find("'s ");  // "<caster>'s <spell>"
         if (apos != std::string::npos && setting_combat_scope.get() != "self") {
           std::string caster = rest.substr(0, apos);
           auto *e = ZealService::get_instance()->entity_manager->Get(caster);
           const char *ct = (e && e->Type == Zeal::GameEnums::EntityTypes::Player) ? "player" : "npc";
-          record_combat_damage(caster, ct, "outgoing", "dot", dot_target, amount);
+          record_combat_damage(caster, ct, "outgoing", "dot", dot_target, "", amount);
         }
       }
     }
