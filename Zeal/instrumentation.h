@@ -31,6 +31,17 @@ void RecordDamage(const std::string &source, const std::string &source_type, con
                   const std::string &damage_type, const std::string &zone, const std::string &target,
                   const std::string &group_leader, long long amount);
 
+// A zone session: the parent of every fight span recorded while you are in that zone, so a trace
+// viewer shows a night's pulls on one timeline instead of one disconnected trace per mob.
+void BeginZoneSession(const std::string &zone);
+void EndZoneSession();
+
+// A completed fight, recorded as a span under the current zone session. `duration_ms` is used to
+// place the span in the past: the fight ended when this is called, so the span covers the window
+// that just closed rather than an instant.
+void RecordFight(const std::string &target, const std::string &zone, const std::string &outcome,
+                 long long damage_dealt, long long damage_taken, unsigned long long duration_ms);
+
 // Healing delivered or received.
 void RecordHeal(const std::string &source, const std::string &direction, const std::string &zone,
                 const std::string &group_leader, long long amount);

@@ -10,16 +10,9 @@
 
 #include "opentelemetry/exporters/otlp/otlp_http_exporter.h"
 #include "opentelemetry/exporters/otlp/otlp_http_exporter_options.h"
-#include "opentelemetry/exporters/otlp/otlp_http_log_record_exporter.h"
-#include "opentelemetry/exporters/otlp/otlp_http_log_record_exporter_options.h"
 #include "opentelemetry/exporters/otlp/otlp_http_metric_exporter.h"
 #include "opentelemetry/exporters/otlp/otlp_http_metric_exporter_options.h"
-#include "opentelemetry/logs/provider.h"
 #include "opentelemetry/metrics/provider.h"
-#include "opentelemetry/sdk/logs/logger_provider_factory.h"
-#include "opentelemetry/sdk/logs/processor.h"
-#include "opentelemetry/sdk/logs/batch_log_record_processor_factory.h"
-#include "opentelemetry/sdk/logs/batch_log_record_processor_options.h"
 #include "opentelemetry/sdk/metrics/export/periodic_exporting_metric_reader_factory.h"
 #include "opentelemetry/sdk/metrics/export/periodic_exporting_metric_reader_options.h"
 #include "opentelemetry/sdk/metrics/meter_provider.h"
@@ -44,7 +37,6 @@
 
 namespace otlp = opentelemetry::exporter::otlp;
 namespace metrics_sdk = opentelemetry::sdk::metrics;
-namespace logs_sdk = opentelemetry::sdk::logs;
 namespace trace_sdk = opentelemetry::sdk::trace;
 
 namespace {
@@ -52,7 +44,6 @@ namespace {
 std::mutex g_mutex;
 bool g_running = false;
 std::shared_ptr<metrics_sdk::MeterProvider> g_meter_provider;
-std::shared_ptr<logs_sdk::LoggerProvider> g_logger_provider;
 std::shared_ptr<trace_sdk::TracerProvider> g_tracer_provider;
 
 // service.instance.id must be unique per instance and stable for its lifetime. The semconv registry
@@ -130,21 +121,8 @@ bool Start(const std::string &endpoint, const std::string &service_version, std:
     std::shared_ptr<opentelemetry::metrics::MeterProvider> meter_api = g_meter_provider;
     opentelemetry::metrics::Provider::SetMeterProvider(meter_api);
 
-    // --- logs ------------------------------------------------------------------------------------
-    // Chat lines. These terminate at the player's own collector by design and never leave the
-    // machine; the endpoint is localhost and the collector's logs pipeline has no remote exporter.
-    otlp::OtlpHttpLogRecordExporterOptions log_options;
-    log_options.url = endpoint + "/v1/logs";
-    log_options.content_type = otlp::HttpRequestContentType::kJson;
-    auto log_exporter = std::unique_ptr<logs_sdk::LogRecordExporter>(
-        new otlp::OtlpHttpLogRecordExporter(log_options, transport));
-    logs_sdk::BatchLogRecordProcessorOptions log_batch;
-    log_batch.schedule_delay_millis = std::chrono::milliseconds(5000);
-    auto log_processor =
-        logs_sdk::BatchLogRecordProcessorFactory::Create(std::move(log_exporter), log_batch);
-    g_logger_provider = logs_sdk::LoggerProviderFactory::Create(std::move(log_processor), resource);
-    std::shared_ptr<opentelemetry::logs::LoggerProvider> logger_api = g_logger_provider;
-    opentelemetry::logs::Provider::SetLoggerProvider(logger_api);
+    // No LoggerProvider: chat is not collected, and nothing else in Zeal emits log records. An
+    // exporter that exists but is never fed is a thing to explain and a thing to get wrong later.
 
     // --- traces ----------------------------------------------------------------------------------
     // Fight spans.
@@ -179,18 +157,14 @@ void Stop() {
 
   // Shutdown, not just flush: each of these owns a thread, and the game will not wait for them.
   if (g_meter_provider) g_meter_provider->Shutdown(timeout);
-  if (g_logger_provider) g_logger_provider->Shutdown(timeout);
   if (g_tracer_provider) g_tracer_provider->Shutdown(timeout);
 
   opentelemetry::metrics::Provider::SetMeterProvider(
       std::shared_ptr<opentelemetry::metrics::MeterProvider>());
-  opentelemetry::logs::Provider::SetLoggerProvider(
-      std::shared_ptr<opentelemetry::logs::LoggerProvider>());
   opentelemetry::trace::Provider::SetTracerProvider(
       std::shared_ptr<opentelemetry::trace::TracerProvider>());
 
   g_meter_provider.reset();
-  g_logger_provider.reset();
   g_tracer_provider.reset();
   g_running = false;
 }

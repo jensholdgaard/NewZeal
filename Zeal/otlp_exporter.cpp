@@ -385,18 +385,16 @@ OtlpExporter::~OtlpExporter() {
 }
 
 void OtlpExporter::log(const std::string &body, int color_index) {
-  if (!setting_enabled.get() || body.empty()) return;
-
-  LogRecord record;
-  record.time_unix_nano = now_unix_nano();
-  record.body = body;
-  record.color_index = color_index;
-  if (Zeal::Game::is_in_game() && Zeal::Game::get_self()) record.zone_id = Zeal::Game::get_self()->ZoneId;
-
-  {
-    std::lock_guard<std::mutex> lock(queue_mutex);
-    queue.push_back(std::move(record));
-  }
+  // Chat is no longer collected at all.
+  //
+  // It only ever reached the player's own collector, whose logs pipeline dropped it - so it produced
+  // no observability while carrying the most sensitive content in the game, private tells among it.
+  // Not collecting it is a stronger guarantee than a pipeline that promises to discard it, and one
+  // fewer thing anyone has to take on trust when they install this.
+  //
+  // The chat hook itself stays: it is what combat damage is parsed from.
+  (void)body;
+  (void)color_index;
 }
 
 std::vector<OtlpClient::Payload> OtlpExporter::collect() {
@@ -412,7 +410,7 @@ std::vector<OtlpClient::Payload> OtlpExporter::collect() {
     }
   }
   if (!batch.empty()) {
-    payloads.emplace_back("/v1/logs", build_logs_payload(batch));
+    // Chat is not collected and spans are the SDK's now; nothing produces these any more.
     logs_posted += batch.size();
   }
   // Metrics use cumulative temporality, so emit the current snapshot every flush even when no new
@@ -552,6 +550,9 @@ bool OtlpExporter::in_combat_scope(const std::string &source) const {
       ZealService::get_instance()->labels_hook->GetLabel(68, pet) && !pet.empty() && source == pet)
     return true;  // 68 = PlayerPetName
   return false;
+}
+
+#endif
 }
 
 void OtlpExporter::record_combat_damage(const std::string &source, const std::string &source_type,
@@ -831,120 +832,6 @@ std::string OtlpExporter::build_metrics_payload() {
 
   // Healing counter (cumulative monotonic Sum), keyed by {source, direction}.
   nlohmann::json heal_points = nlohmann::json::array();
-  {
-    std::lock_guard<std::mutex> lock(metrics_mutex);
-    for (const auto &[key, total] : combat_heal) {
-      nlohmann::json attrs =
-          nlohmann::json::array({string_attr(everquest_semconv::kEverquestCombatSource, std::get<0>(key)),
-                                 string_attr(everquest_semconv::kEverquestCombatDirection, std::get<1>(key)),
-                                 string_attr(everquest_semconv::kEverquestZoneName, std::get<2>(key))});
-      if (!std::get<3>(key).empty())
-        attrs.push_back(string_attr(everquest_semconv::kEverquestGroupLeader, std::get<3>(key)));
-      heal_points.push_back({{"attributes", attrs},
-                             {"startTimeUnixNano", start},
-                             {"timeUnixNano", now},
-                             {"asInt", std::to_string(total)}});
-    }
-  }
-  if (!heal_points.empty()) {
-    nlohmann::json metric;
-    metric["name"] = everquest_semconv::kEverquestCombatHealMetric;
-    metric["unit"] = "{hitpoint}";
-    metric["sum"] = {{"dataPoints", heal_points}, {"aggregationTemporality", 2}, {"isMonotonic", true}};
-    metrics.push_back(metric);
-  }
-
-  // Attack (offense) and haste gauges for DPS correlation, read from the game-thread snapshot.
-  {
-    Snapshot s;
-    {
-      std::lock_guard<std::mutex> lock(snapshot_mutex);
-      s = snapshot;
-    }
-#ifndef ZEAL_OTEL_SDK
-    // Migrated to asynchronous gauges in instrumentation.cpp: these values sit behind an accessor,
-    // which is the case the spec points at observable instruments for.
-    if (s.have_attack) metrics.push_back(gauge_metric(everquest_semconv::kEverquestCharacterAttackMetric, "1", now, s.attack, s.zone));
-    if (s.have_haste) metrics.push_back(gauge_metric(everquest_semconv::kEverquestCharacterHasteMetric, "%", now, s.haste, s.zone));
-#endif
-
-    // Group roster: one point of value 1 per member, so a dashboard can show who is *in* the group
-    // rather than only the subset of it that runs Zeal.
-    //
-    // A non-monotonic Sum, not a Gauge: per the OTLP/Prometheus compatibility spec an info-style
-    // metric "MUST be converted to an OTLP Non-Monotonic Sum ... because the value of 1 is intended
-    // to be viewed as a count, which should be summed together when aggregating away labels" - so
-    // sum() over the member attribute yields the group size.
-    if (!s.group_members.empty()) {
-      nlohmann::json member_points = nlohmann::json::array();
-      for (const std::string &member : s.group_members) {
-        member_points.push_back(
-            {{"attributes", nlohmann::json::array({string_attr(everquest_semconv::kEverquestGroupLeader, s.group_leader),
-                                                   string_attr(everquest_semconv::kEverquestCharacterName, member),
-                                                   string_attr(everquest_semconv::kEverquestZoneName, s.zone)})},
-             {"startTimeUnixNano", start},
-             {"timeUnixNano", now},
-             {"asInt", "1"}});
-      }
-      nlohmann::json metric;
-      metric["name"] = everquest_semconv::kEverquestGroupMemberMetric;
-      metric["unit"] = "{member}";
-      metric["sum"] = {{"dataPoints", member_points}, {"aggregationTemporality", 2}, {"isMonotonic", false}};
-      metrics.push_back(metric);
-    }
-  }
-
-  // Raid lockouts: value is the unix second the lockout expires, so a dashboard subtracts now() to
-  // count down and stays correct between exports (and after the player logs off).
-  {
-    const long long now_s = static_cast<long long>(now_unix_nano() / 1000000000ULL);
-    nlohmann::json lockout_points = nlohmann::json::array();
-    {
-      std::lock_guard<std::mutex> lock(metrics_mutex);
-      for (auto it = lockouts.begin(); it != lockouts.end();) {
-        if (it->second <= now_s) {
-          it = lockouts.erase(it);  // expired: stop exporting it
-          continue;
-        }
-        lockout_points.push_back(
-            {{"attributes", nlohmann::json::array({string_attr(everquest_semconv::kEverquestRaidTarget, it->first)})},
-             {"timeUnixNano", now},
-             {"asInt", std::to_string(it->second)}});
-        ++it;
-      }
-    }
-    if (!lockout_points.empty()) {
-      nlohmann::json metric;
-      metric["name"] = everquest_semconv::kEverquestRaidLockoutExpiryMetric;
-      metric["unit"] = "s";
-      metric["gauge"] = {{"dataPoints", lockout_points}};
-      metrics.push_back(metric);
-    }
-
-    // Time of death, kept for a week rather than until the lockout expires: the lockout governs
-    // looting, but a spawn window outlives it, and the TOD is what the next raid is planned around.
-    nlohmann::json kill_points = nlohmann::json::array();
-    {
-      std::lock_guard<std::mutex> lock(metrics_mutex);
-      for (auto it = raid_kills.begin(); it != raid_kills.end();) {
-        if (now_s - it->second > 7 * 24 * 3600) {
-          it = raid_kills.erase(it);
-          continue;
-        }
-        kill_points.push_back(
-            {{"attributes", nlohmann::json::array({string_attr(everquest_semconv::kEverquestRaidTarget, it->first)})},
-             {"timeUnixNano", now},
-             {"asInt", std::to_string(it->second)}});
-        ++it;
-      }
-    }
-    if (!kill_points.empty()) {
-      nlohmann::json metric;
-      metric["name"] = everquest_semconv::kEverquestRaidKillTimestampMetric;
-      metric["unit"] = "s";
-      metric["gauge"] = {{"dataPoints", kill_points}};
-      metrics.push_back(metric);
-    }
   }
 
   if (metrics.empty()) return "";
@@ -986,12 +873,19 @@ void OtlpExporter::end_fight(const std::string &key, const char *outcome, unsign
   sp.name = "fight " + f.display;
   sp.start_ns = f.start_ns;
   sp.end_ns = end_ns ? end_ns : f.last_ns;
+#ifdef ZEAL_OTEL_SDK
+  (void)sp;
+  const unsigned long long finished_ns = end_ns ? end_ns : f.last_ns;
+  const unsigned long long duration_ms = (finished_ns > f.start_ns) ? (finished_ns - f.start_ns) / 1000000ULL : 0;
+  zeal::instrumentation::RecordFight(key, zone_active, outcome, f.dmg_out, f.dmg_in, duration_ms);
+#else
   sp.str_attrs = {{everquest_semconv::kEverquestCombatTarget, key}, {everquest_semconv::kEverquestZoneName, zone_active}, {"everquest.fight.outcome", outcome}};
   sp.int_attrs = {{"everquest.fight.damage.dealt", f.dmg_out}, {"everquest.fight.damage.taken", f.dmg_in}};
   {
     std::lock_guard<std::mutex> lock(spans_mutex);
     completed_spans.push_back(std::move(sp));
   }
+#endif
   active_fights.erase(it);
 }
 
@@ -1005,6 +899,11 @@ void OtlpExporter::fight_tick() {
       ++it;
       end_fight(key, "zoned", 0);
     }
+#ifdef ZEAL_OTEL_SDK
+    // The SDK owns span identity and parenting now, so there are no ids to mint or thread through.
+    if (!zone_active.empty()) zeal::instrumentation::EndZoneSession();
+    if (!zone.empty()) zeal::instrumentation::BeginZoneSession(zone);
+#else
     if (!zone_active.empty() && zone_start_ns) {  // close the previous zone-session span
       FightSpan sp;
       sp.trace_id = zone_trace_id;
@@ -1016,6 +915,7 @@ void OtlpExporter::fight_tick() {
       std::lock_guard<std::mutex> lock(spans_mutex);
       completed_spans.push_back(std::move(sp));
     }
+#endif
     zone_active = zone;
     if (!zone.empty()) {
       zone_trace_id = hex_id(16);
