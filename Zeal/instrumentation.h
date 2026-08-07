@@ -67,14 +67,6 @@ void SweepCompleteHealChains();
 void RecordFightTotals(const std::string &target, const std::string &zone, double duration_s,
                        const std::vector<std::pair<std::string, double>> &active_seconds_by_source);
 
-// Healing delivered or received.// A finished encounter, recorded when the fight closes.
-//
-// `duration_s` is the whole fight; `active` is per attacker - the seconds each one was actually
-// dealing damage. Damage divided by one gives SDPS, by the other DPS, which are the two rates the
-// community's parser prints side by side and the two the guild argues about.
-void RecordFightTotals(const std::string &target, const std::string &zone, double duration_s,
-                       const std::vector<std::pair<std::string, double>> &active_seconds_by_source);
-
 // Healing delivered or received.
 void RecordHeal(const std::string &source, const std::string &direction, const std::string &zone,
                 const std::string &group_leader, long long amount);
