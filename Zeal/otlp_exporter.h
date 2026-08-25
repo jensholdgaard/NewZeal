@@ -82,6 +82,23 @@ class OtlpExporter {
   ZealSetting<std::string> setting_endpoint = {"http://127.0.0.1:4318", "Zeal", "OtlpEndpoint", false};
   ZealSetting<int> setting_flush_ms = {2000, "Zeal", "OtlpFlushMs", false};
   ZealSetting<int> setting_max_batch = {512, "Zeal", "OtlpMaxBatch", false};
+  // The ingest token, sealed with DPAPI so the ini holds a blob that is inert
+  // on any other machine or Windows account. Members do post their Zeal ini
+  // when asking for help; this makes that harmless.
+  ZealSetting<std::string> setting_token_sealed = {"", "Zeal", "OtlpTokenSealed", false};
+
+  // Plaintext token, memory only, unsealed once on first use. Never printed,
+  // never written anywhere: chat output lands in eqlog_*.txt whenever logging
+  // is on, which is exactly the file people share.
+  mutable std::string token_plain;
+  mutable bool token_loaded = false;
+
+  // DPAPI seal/unseal, base64 in the ini. Empty string on any failure, which
+  // degrades to "no auth header" rather than to a crash.
+  static std::string seal_token(const std::string &plain);
+  static std::string unseal_token(const std::string &sealed);
+  // The token to send, unsealing on first call. "" when none is configured.
+  const std::string &auth_token() const;
 
   std::deque<LogRecord> queue;
   mutable std::mutex queue_mutex;

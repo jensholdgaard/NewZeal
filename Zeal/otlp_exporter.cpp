@@ -1,6 +1,7 @@
 #include "otlp_exporter.h"
 
 #include <winhttp.h>
+#include <wincrypt.h>
 
 #include <cctype>
 #include <chrono>
@@ -18,6 +19,7 @@
 #include "zeal.h"
 
 #pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "crypt32.lib")
 
 namespace {
 // OTLP/HTTP JSON encodes 64-bit integer fields (timeUnixNano, AnyValue.intValue) as strings.
@@ -130,7 +132,7 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
   // cached snapshot, so it never races the game thread reading/freeing character structures.
   zeal->callbacks->AddGeneric([this]() { sample_game_state(); });
 
-  zeal->commands_hook->Add("/otlp", {}, "OTLP/HTTP telemetry export. Usage: /otlp on|off|status|endpoint <url>",
+  zeal->commands_hook->Add("/otlp", {}, "OTLP/HTTP telemetry export. Usage: /otlp on|off|status|endpoint <url>|token <token>",
                            [this](std::vector<std::string> &args) {
                              if (args.size() == 2 && Zeal::String::compare_insensitive(args[1], "on")) {
                                setting_enabled.set(true);
@@ -146,6 +148,33 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                              if (args.size() == 3 && Zeal::String::compare_insensitive(args[1], "endpoint")) {
                                setting_endpoint.set(args[2]);
                                Zeal::Game::print_chat("OTLP endpoint set to %s", args[2].c_str());
+                               return true;
+                             }
+                             if (args.size() >= 2 && Zeal::String::compare_insensitive(args[1], "token")) {
+                               if (args.size() == 3 && Zeal::String::compare_insensitive(args[2], "clear")) {
+                                 setting_token_sealed.set("");
+                                 token_plain.clear();
+                                 token_loaded = true;
+                                 Zeal::Game::print_chat("OTLP token cleared.");
+                                 return true;
+                               }
+                               if (args.size() != 3) {
+                                 Zeal::Game::print_chat("Usage: /otlp token <token>  (or: /otlp token clear)");
+                                 return true;
+                               }
+                               const std::string sealed = seal_token(args[2]);
+                               if (sealed.empty()) {
+                                 Zeal::Game::print_chat("OTLP: could not store the token (DPAPI refused).");
+                                 return true;
+                               }
+                               setting_token_sealed.set(sealed);
+                               token_plain = args[2];
+                               token_loaded = true;
+                               // Deliberately never echoes the value. Chat output is written to
+                               // eqlog_*.txt whenever logging is on, and that is the file members
+                               // hand over when asking for help.
+                               Zeal::Game::print_chat("OTLP token stored (%i chars, sealed to this Windows account).",
+                                                      static_cast<int>(args[2].size()));
                                return true;
                              }
                              if (args.size() == 3 && Zeal::String::compare_insensitive(args[1], "flush")) {
@@ -174,10 +203,20 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                                                     setting_enabled.get() ? "enabled" : "disabled",
                                                     setting_endpoint.get().c_str(), setting_flush_ms.get(),
                                                     setting_combat_scope.get().c_str());
+                             // Presence and a short tail only — enough to tell two tokens apart
+                             // without putting a usable one in the log.
+                             {
+                               const std::string &tok = auth_token();
+                               if (tok.empty())
+                                 Zeal::Game::print_chat("  token: not set (uploads are unauthenticated)");
+                               else
+                                 Zeal::Game::print_chat("  token: set (ends %s)",
+                                                        tok.size() >= 4 ? tok.substr(tok.size() - 4).c_str() : "****");
+                             }
                              Zeal::Game::print_chat("  sent: %llu log batches-worth, %llu metric posts, %llu failed",
                                                     logs_posted.load(), metrics_posted.load(), failed_posts.load());
                              Zeal::Game::print_chat("  last HTTP status: %i", last_http_status.load());
-                             Zeal::Game::print_chat("Usage: /otlp on|off|status|endpoint <url>|flush <ms>|scope self|all");
+                             Zeal::Game::print_chat("Usage: /otlp on|off|status|endpoint <url>|token <token>|flush <ms>|scope self|all");
                              return true;
                            });
 }
@@ -510,6 +549,61 @@ std::string OtlpExporter::build_metrics_payload() {
   return payload.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
+// --- token storage -----------------------------------------------------------
+// The ingest token authenticates uploads. It is not a dashboard credential —
+// that is Discord SSO — so a leak means someone can post fake numbers as you,
+// not read anything. Worth sealing, not worth making anyone retype it before
+// every raid.
+
+std::string OtlpExporter::seal_token(const std::string &plain) {
+  if (plain.empty()) return std::string();
+  DATA_BLOB in = {static_cast<DWORD>(plain.size()), (BYTE *)plain.data()};
+  DATA_BLOB out = {0, nullptr};
+  // CRYPTPROTECT_UI_FORBIDDEN: this runs on a game thread; never prompt.
+  if (!CryptProtectData(&in, L"Zeal OTLP token", nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &out))
+    return std::string();
+  DWORD b64_len = 0;
+  std::string encoded;
+  if (CryptBinaryToStringA(out.pbData, out.cbData, CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, nullptr, &b64_len)) {
+    encoded.resize(b64_len);
+    if (CryptBinaryToStringA(out.pbData, out.cbData, CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, encoded.data(),
+                             &b64_len))
+      encoded.resize(strnlen(encoded.c_str(), encoded.size()));
+    else
+      encoded.clear();
+  }
+  LocalFree(out.pbData);
+  return encoded;
+}
+
+std::string OtlpExporter::unseal_token(const std::string &sealed) {
+  if (sealed.empty()) return std::string();
+  DWORD blob_len = 0;
+  if (!CryptStringToBinaryA(sealed.c_str(), 0, CRYPT_STRING_BASE64, nullptr, &blob_len, nullptr, nullptr))
+    return std::string();
+  std::vector<BYTE> blob(blob_len);
+  if (!CryptStringToBinaryA(sealed.c_str(), 0, CRYPT_STRING_BASE64, blob.data(), &blob_len, nullptr, nullptr))
+    return std::string();
+  DATA_BLOB in = {blob_len, blob.data()};
+  DATA_BLOB out = {0, nullptr};
+  // Fails by design if the ini was copied from another machine or account —
+  // which is the property that makes sharing the file harmless.
+  if (!CryptUnprotectData(&in, nullptr, nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &out))
+    return std::string();
+  std::string plain(reinterpret_cast<char *>(out.pbData), out.cbData);
+  SecureZeroMemory(out.pbData, out.cbData);
+  LocalFree(out.pbData);
+  return plain;
+}
+
+const std::string &OtlpExporter::auth_token() const {
+  if (!token_loaded) {
+    token_plain = unseal_token(setting_token_sealed.get());
+    token_loaded = true;
+  }
+  return token_plain;
+}
+
 bool OtlpExporter::post_json(const std::string &path, const std::string &json_body) {
   std::string url = setting_endpoint.get() + path;
   std::wstring wurl(url.begin(), url.end());
@@ -537,8 +631,15 @@ bool OtlpExporter::post_json(const std::string &path, const std::string &json_bo
       HINTERNET request = WinHttpOpenRequest(connect, L"POST", url_path, nullptr, WINHTTP_NO_REFERER,
                                              WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
       if (request) {
-        const wchar_t *headers = L"Content-Type: application/json";
-        if (WinHttpSendRequest(request, headers, -1L, (LPVOID)json_body.data(),
+        // Authenticate to the guild gateway. Without a token this stays a bare
+        // content-type header, which is what a purely local collector wants.
+        std::wstring headers = L"Content-Type: application/json";
+        const std::string &token = auth_token();
+        if (!token.empty()) {
+          headers += L"\r\nAuthorization: Bearer ";
+          headers.append(token.begin(), token.end());
+        }
+        if (WinHttpSendRequest(request, headers.c_str(), -1L, (LPVOID)json_body.data(),
                                static_cast<DWORD>(json_body.size()), static_cast<DWORD>(json_body.size()), 0) &&
             WinHttpReceiveResponse(request, nullptr)) {
           DWORD status = 0, size = sizeof(status);
