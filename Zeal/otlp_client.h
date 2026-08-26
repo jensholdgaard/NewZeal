@@ -36,6 +36,10 @@ class OtlpClient {
   void set_endpoint(const std::string &endpoint);
   void set_flush_ms(int ms);
   void set_enabled(bool enabled);
+  // Bearer token sent with every payload, or empty for an unauthenticated
+  // endpoint. The transport is handed the token already in the clear; how it
+  // is stored at rest is the exporter's problem, not the socket's.
+  void set_auth_token(const std::string &token);
 
   // Wakes the worker early (e.g. a queue crossed its batch threshold, or /otlp flush was used).
   void nudge();
@@ -61,6 +65,7 @@ class OtlpClient {
   bool end_thread = false;
 
   std::string endpoint = "http://127.0.0.1:4318";
+  std::string auth_token;  // guarded by `mutex`, like `endpoint`
   std::atomic<int> flush_ms{2000};
   std::atomic<bool> enabled{false};
 

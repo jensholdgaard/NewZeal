@@ -8,12 +8,17 @@
 #endif
 
 #include <winhttp.h>
+#include <wincrypt.h>  // DPAPI: the ingest token is sealed to this Windows account
+
+#pragma comment(lib, "crypt32.lib")
 
 #include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <random>
+#include <string>
+#include <vector>
 
 #include "callbacks.h"
 #include "chat.h"
@@ -344,6 +349,39 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                                Zeal::Game::print_chat("OTLP endpoint set to %s", args[2].c_str());
                                return true;
                              }
+                             // Deliberately never echoes the value, and does not
+                             // fall through to the generic usage line on a bad
+                             // argument. print_chat output is written to
+                             // eqlog_*.txt whenever logging is on - the same file
+                             // people hand over when asking for help with their UI,
+                             // and the one pq companion reads. A token that reaches
+                             // a log is a token to reissue.
+                             if (args.size() >= 2 && Zeal::String::compare_insensitive(args[1], "token")) {
+                               if (args.size() == 3 &&
+                                   Zeal::String::compare_insensitive(args[2], "clear")) {
+                                 setting_token_sealed.set("");
+                                 token_plain.clear();
+                                 token_loaded = true;
+                                 client->set_auth_token("");
+                                 Zeal::Game::print_chat("OTLP token cleared.");
+                                 return true;
+                               }
+                               if (args.size() != 3) {
+                                 Zeal::Game::print_chat("Usage: /otlp token <token> | /otlp token clear");
+                                 return true;
+                               }
+                               const std::string sealed = seal_token(args[2]);
+                               if (sealed.empty()) {
+                                 Zeal::Game::print_chat("OTLP token could not be stored (DPAPI failed).");
+                                 return true;
+                               }
+                               setting_token_sealed.set(sealed);
+                               token_plain = args[2];
+                               token_loaded = true;
+                               client->set_auth_token(token_plain);
+                               Zeal::Game::print_chat("OTLP token stored (sealed to this Windows account).");
+                               return true;
+                             }
                              if (args.size() == 3 && Zeal::String::compare_insensitive(args[1], "flush")) {
                                int ms = 0;
                                if (!Zeal::String::tryParse(args[2], &ms)) {
@@ -396,14 +434,26 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                              Zeal::Game::print_chat("  sent: %llu log lines, %llu payloads, %llu failed",
                                                     logs_posted.load(), client->posted(), client->failed());
                              Zeal::Game::print_chat("  last HTTP status: %i", client->last_status());
+                             // Presence and the last four characters: enough to
+                             // tell two tokens apart without putting a working
+                             // one in the chat log.
+                             {
+                               const std::string &tok = auth_token();
+                               if (tok.empty())
+                                 Zeal::Game::print_chat("  token: not set");
+                               else
+                                 Zeal::Game::print_chat("  token: set (ends %s)",
+                                                        tok.substr(tok.size() - 4).c_str());
+                             }
                              {
                                const std::string err = client->last_error();
                                if (!err.empty())
                                  Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "  last error: %s", err.c_str());
                              }
-                             Zeal::Game::print_chat("Usage: /otlp on|off|status|endpoint <url>|flush <ms>|scope self|all");
+                             Zeal::Game::print_chat("Usage: /otlp on|off|status|endpoint <url>|token <token>|flush <ms>|scope self|all");
                              return true;
                            });
+
 
   // Constructed last: the worker calls collect() as soon as it starts, so every piece of state it
   // reads must already exist.
@@ -411,6 +461,7 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
   client->set_endpoint(setting_endpoint.get());
   client->set_flush_ms(setting_flush_ms.get());
   client->set_enabled(setting_enabled.get());
+  client->set_auth_token(auth_token());
 }
 
 OtlpExporter::~OtlpExporter() {
@@ -491,6 +542,64 @@ static bool parse_ch_handoff(const std::string &line, std::string &next_caster) 
   next_caster = Zeal::String::trim_and_reduce_spaces(line.substr(marker + 6, stop - marker - 6));
   // A name, not a sentence: anything with spaces is someone talking about the chain, not a cue.
   return !next_caster.empty() && next_caster.find(' ') == std::string::npos;
+}
+
+// ---------------------------------------------------------------------------
+// Token storage
+//
+// The value is a bearer credential for the guild's ingest gateway. It is
+// sealed with CryptProtectData, which ties it to this Windows account, and
+// base64'd so it survives an ini round-trip. A blob lifted out of someone
+// else's zeal.ini decrypts to nothing on this machine.
+// ---------------------------------------------------------------------------
+
+std::string OtlpExporter::seal_token(const std::string &plain) {
+  if (plain.empty()) return "";
+  DATA_BLOB in = {static_cast<DWORD>(plain.size()), (BYTE *)plain.data()};
+  DATA_BLOB out = {0, nullptr};
+  if (!CryptProtectData(&in, L"Zeal OTLP token", nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN,
+                        &out))
+    return "";
+  DWORD chars = 0;
+  std::string encoded;
+  if (CryptBinaryToStringA(out.pbData, out.cbData, CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, nullptr,
+                           &chars) &&
+      chars > 0) {
+    encoded.resize(chars);
+    if (!CryptBinaryToStringA(out.pbData, out.cbData, CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF,
+                              &encoded[0], &chars))
+      encoded.clear();
+    else
+      encoded.resize(strlen(encoded.c_str()));
+  }
+  LocalFree(out.pbData);
+  return encoded;
+}
+
+std::string OtlpExporter::unseal_token(const std::string &sealed) {
+  if (sealed.empty()) return "";
+  DWORD bytes = 0;
+  if (!CryptStringToBinaryA(sealed.c_str(), 0, CRYPT_STRING_BASE64, nullptr, &bytes, nullptr, nullptr) ||
+      bytes == 0)
+    return "";
+  std::vector<BYTE> raw(bytes);
+  if (!CryptStringToBinaryA(sealed.c_str(), 0, CRYPT_STRING_BASE64, raw.data(), &bytes, nullptr, nullptr))
+    return "";
+  DATA_BLOB in = {bytes, raw.data()};
+  DATA_BLOB out = {0, nullptr};
+  if (!CryptUnprotectData(&in, nullptr, nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &out))
+    return "";  // another account's blob, or a corrupted ini: upload unauthenticated
+  std::string plain(reinterpret_cast<char *>(out.pbData), out.cbData);
+  LocalFree(out.pbData);
+  return plain;
+}
+
+const std::string &OtlpExporter::auth_token() const {
+  if (!token_loaded) {
+    token_plain = unseal_token(setting_token_sealed.get());
+    token_loaded = true;
+  }
+  return token_plain;
 }
 
 void OtlpExporter::log(const std::string &body, int color_index) {

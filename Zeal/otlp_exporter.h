@@ -125,6 +125,21 @@ class OtlpExporter {
   ZealSetting<std::string> setting_endpoint = {"http://127.0.0.1:4318", "Zeal", "OtlpEndpoint", false};
   ZealSetting<int> setting_flush_ms = {2000, "Zeal", "OtlpFlushMs", false};
   ZealSetting<int> setting_max_batch = {512, "Zeal", "OtlpMaxBatch", false};
+  // The ingest token, sealed with DPAPI so what lands in zeal.ini is inert on
+  // any other machine or Windows account. That matters because the ini is the
+  // file people paste when asking for help with their UI.
+  ZealSetting<std::string> setting_token_sealed = {"", "Zeal", "OtlpTokenSealed", false};
+
+  // Unsealed once, lazily, and kept in memory for the transport.
+  mutable std::string token_plain;
+  mutable bool token_loaded = false;
+
+  // DPAPI, both directions. Either failing yields an empty string rather than
+  // an error: an ini copied from a friend degrades to unauthenticated uploads
+  // instead of breaking the client.
+  static std::string seal_token(const std::string &plain);
+  static std::string unseal_token(const std::string &sealed);
+  const std::string &auth_token() const;
 
   std::deque<LogRecord> queue;
   mutable std::mutex queue_mutex;

@@ -58,11 +58,18 @@ void OtlpClient::worker_loop() {
   }
 }
 
+void OtlpClient::set_auth_token(const std::string &token) {
+  std::lock_guard<std::mutex> lock(mutex);
+  auth_token = token;
+}
+
 bool OtlpClient::post(const std::string &path, const std::string &json_body) {
   std::string url;
+  std::string token;
   {
     std::lock_guard<std::mutex> lock(mutex);
     url = endpoint + path;
+    token = auth_token;
   }
   std::wstring wurl(url.begin(), url.end());
 
@@ -89,8 +96,15 @@ bool OtlpClient::post(const std::string &path, const std::string &json_body) {
       HINTERNET request = WinHttpOpenRequest(connect, L"POST", url_path, nullptr, WINHTTP_NO_REFERER,
                                              WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
       if (request) {
-        const wchar_t *headers = L"Content-Type: application/json";
-        if (WinHttpSendRequest(request, headers, -1L, (LPVOID)json_body.data(),
+        // The gateway authenticates per member, so an unauthenticated POST is
+        // a 401 rather than an anonymous accept. An empty token is still a
+        // valid state: a local collector wants no Authorization at all.
+        std::wstring headers = L"Content-Type: application/json";
+        if (!token.empty()) {
+          headers += L"\r\nAuthorization: Bearer ";
+          headers.append(token.begin(), token.end());  // tokens are hex, so no widening to do
+        }
+        if (WinHttpSendRequest(request, headers.c_str(), -1L, (LPVOID)json_body.data(),
                                static_cast<DWORD>(json_body.size()), static_cast<DWORD>(json_body.size()), 0) &&
             WinHttpReceiveResponse(request, nullptr)) {
           DWORD status = 0, size = sizeof(status);
