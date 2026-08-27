@@ -123,7 +123,9 @@ class OtlpExporter {
 
   ZealSetting<bool> setting_enabled = {false, "Zeal", "OtlpEnabled", false};
   ZealSetting<std::string> setting_endpoint = {"http://127.0.0.1:4318", "Zeal", "OtlpEndpoint", false};
-  ZealSetting<int> setting_flush_ms = {2000, "Zeal", "OtlpFlushMs", false};
+  // Drives both transports. 5s is a deliberate middle: the dashboard refreshes at 10s, and every
+  // export re-sends every series, so faster mostly buys upstream bandwidth nobody sees.
+  ZealSetting<int> setting_flush_ms = {5000, "Zeal", "OtlpFlushMs", false};
   ZealSetting<int> setting_max_batch = {512, "Zeal", "OtlpMaxBatch", false};
   // The ingest token, sealed with DPAPI so what lands in zeal.ini is inert on
   // any other machine or Windows account. That matters because the ini is the

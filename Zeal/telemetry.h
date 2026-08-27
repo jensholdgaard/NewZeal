@@ -29,8 +29,17 @@ namespace zeal::telemetry {
 // Both `endpoint` and `token` are captured when the providers are built and cannot be changed
 // afterwards - the exporters hold their own copies. Changing either at runtime therefore means
 // Stop() and a fresh Start(), which is what /otlp endpoint and /otlp token do.
-bool Start(const std::string &endpoint, const std::string &token, const std::string &service_version,
-           std::string &error);
+// `export_interval_ms` is how often metrics are pushed. Metrics here are cumulative, so every
+// export re-sends every series - the payload is proportional to the total, not to what changed -
+// which is why this is clamped rather than free: a raider running `scope all` carries a few
+// thousand series, and at 1 Hz that is around a megabyte a second of upstream, competing with the
+// game's own traffic. Anything below the dashboard's refresh is also invisible.
+bool Start(const std::string &endpoint, const std::string &token, int export_interval_ms,
+           const std::string &service_version, std::string &error);
+
+// The floor and ceiling applied to that interval.
+constexpr int kMinExportIntervalMs = 1000;
+constexpr int kMaxExportIntervalMs = 300000;
 
 // Flushes and shuts down all three providers. Must run before the DLL unloads: the metric reader
 // and the batch processors own threads that would otherwise export from freed memory.

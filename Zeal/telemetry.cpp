@@ -1,5 +1,7 @@
 #include "telemetry.h"
 
+#include <algorithm>
+
 // The SDK's headers use std::min/max, which the Windows macros break. Zeal deliberately does NOT
 // define NOMINMAX globally - 164 call sites rely on the macros - so it is scoped to these includes
 // and restored afterwards.
@@ -69,8 +71,8 @@ std::string NewInstanceId() {
 
 namespace zeal::telemetry {
 
-bool Start(const std::string &endpoint, const std::string &token, const std::string &service_version,
-           std::string &error) {
+bool Start(const std::string &endpoint, const std::string &token, int export_interval_ms,
+           const std::string &service_version, std::string &error) {
   std::lock_guard<std::mutex> lock(g_mutex);
   if (g_running) return true;
 
@@ -117,8 +119,16 @@ bool Start(const std::string &endpoint, const std::string &token, const std::str
         new otlp::OtlpHttpMetricExporter(metric_options, transport));
 
     metrics_sdk::PeriodicExportingMetricReaderOptions reader_options;
-    reader_options.export_interval_millis = std::chrono::milliseconds(10000);
-    reader_options.export_timeout_millis = std::chrono::milliseconds(5000);
+    // Comparisons, not std::min/max: windows.h arrives with the transport header below the
+    // push/pop guard above, so min and max are macros by the time this line is compiled.
+    int interval = export_interval_ms;
+    if (interval < kMinExportIntervalMs) interval = kMinExportIntervalMs;
+    if (interval > kMaxExportIntervalMs) interval = kMaxExportIntervalMs;
+    reader_options.export_interval_millis = std::chrono::milliseconds(interval);
+    // Must stay below the interval or the reader can start an export while the previous one is
+    // still running; half of it, capped, leaves room for a slow round trip without overlapping.
+    const int timeout = interval / 2 < 5000 ? interval / 2 : 5000;
+    reader_options.export_timeout_millis = std::chrono::milliseconds(timeout);
     auto reader = metrics_sdk::PeriodicExportingMetricReaderFactory::Create(std::move(metric_exporter),
                                                                             reader_options);
     auto meter_provider = metrics_sdk::MeterProviderFactory::Create(

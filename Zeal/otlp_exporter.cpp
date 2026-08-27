@@ -311,7 +311,7 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
     if (is_enabled()) {
       if (!zeal::telemetry::Running()) {
         std::string err;
-        if (!zeal::telemetry::Start(setting_endpoint.get(), auth_token(),
+        if (!zeal::telemetry::Start(setting_endpoint.get(), auth_token(), setting_flush_ms.get(),
                                     ZEAL_VERSION "+" ZEAL_BUILD_VERSION, err))
           Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "OpenTelemetry failed to start: %s", err.c_str());
       }
@@ -399,7 +399,31 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                                  ms = OtlpClient::kMinFlushMs;  // Clamp: metrics are periodic; 0 would just hammer.
                                setting_flush_ms.set(ms);
                                client->set_flush_ms(ms);
+#ifdef ZEAL_OTEL_SDK
+                               // The SDK reads this when its providers are built, so the setting
+                               // only becomes real on a rebuild. Without this the command changed
+                               // a number in the ini and nothing else - the export interval stayed
+                               // wherever it started.
+                               restart_pipeline();
+                               // Clamped with comparisons rather than std::min/max: windows.h is
+                               // in scope here and defines min/max as macros, and NOMINMAX cannot
+                               // be set for this file (see telemetry.cpp - 164 call sites rely on
+                               // the macros).
+                               int effective = ms;
+                               if (effective < zeal::telemetry::kMinExportIntervalMs)
+                                 effective = zeal::telemetry::kMinExportIntervalMs;
+                               if (effective > zeal::telemetry::kMaxExportIntervalMs)
+                                 effective = zeal::telemetry::kMaxExportIntervalMs;
+                               if (effective != ms)
+                                 Zeal::Game::print_chat(
+                                     "OTLP flush interval set to %ims (clamped from %ims: every export "
+                                     "re-sends every series)",
+                                     effective, ms);
+                               else
+                                 Zeal::Game::print_chat("OTLP flush interval set to %ims", effective);
+#else
                                Zeal::Game::print_chat("OTLP flush interval set to %ims", ms);
+#endif
                                return true;
                              }
                              if (args.size() == 2 && Zeal::String::compare_insensitive(args[1], "debug")) {
@@ -434,6 +458,8 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                                }
                                return true;
                              }
+                             // Reports the interval actually in force, not the number in the ini:
+                             // the two differ whenever the setting is below the floor.
                              Zeal::Game::print_chat("OTLP: %s, endpoint %s, flush %ims, scope %s",
                                                     setting_enabled.get() ? "enabled" : "disabled",
                                                     setting_endpoint.get().c_str(), setting_flush_ms.get(),
