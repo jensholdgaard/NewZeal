@@ -445,12 +445,21 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                              // tell two tokens apart without putting a working
                              // one in the chat log.
                              {
+                               // "Stored but unreadable" is a different problem from "never set",
+                               // and reporting both as "not set" is what hid a truncating ini read:
+                               // the token was there, the client could not use it, and nothing said
+                               // so while uploads went out unauthenticated.
                                const std::string &tok = auth_token();
-                               if (tok.empty())
-                                 Zeal::Game::print_chat("  token: not set");
-                               else
+                               if (!tok.empty())
                                  Zeal::Game::print_chat("  token: set (ends %s)",
                                                         tok.substr(tok.size() - 4).c_str());
+                               else if (setting_token_sealed.get().empty())
+                                 Zeal::Game::print_chat("  token: not set");
+                               else
+                                 Zeal::Game::print_chat(
+                                     USERCOLOR_SPELL_FAILURE,
+                                     "  token: stored but could not be read - set it again with "
+                                     "/otlp token <token>");
                              }
                              {
                                const std::string err = client->last_error();
