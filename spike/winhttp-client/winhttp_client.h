@@ -37,6 +37,22 @@ namespace winhttp_client {
 
 namespace http_client = opentelemetry::ext::http::client;
 
+// Delivery statistics for the whole transport, aggregated across every session.
+//
+// The SDK reports export failures only through its internal log handler, so without this there is
+// no way to ask, from in game, whether telemetry is actually arriving - which is how an
+// unauthenticated exporter posted into the void unnoticed. `/otlp status` reads these.
+struct Stats {
+  unsigned long long posted = 0;  // responses with a 2xx status
+  unsigned long long failed = 0;  // everything else, transport errors included
+  int last_status = 0;            // most recent HTTP status, 0 if none completed
+  std::string last_error;         // most recent failure, with the server's explanation if it gave one
+};
+
+Stats GetStats();
+// Called by the session as each request finishes; `status` of 0 means it never got a response.
+void RecordResult(int status, const std::string &error);
+
 class Request final : public http_client::Request {
  public:
   void SetMethod(http_client::Method method) noexcept override { method_ = method; }

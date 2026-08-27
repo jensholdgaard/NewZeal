@@ -177,6 +177,16 @@ void Stop() {
   g_running = false;
 }
 
+ExportStats Stats() {
+  const auto raw = winhttp_client::GetStats();
+  ExportStats out;
+  out.posted = raw.posted;
+  out.failed = raw.failed;
+  out.last_status = raw.last_status;
+  out.last_error = raw.last_error;
+  return out;
+}
+
 bool Running() {
   std::lock_guard<std::mutex> lock(g_mutex);
   return g_running;

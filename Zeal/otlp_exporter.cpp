@@ -438,9 +438,24 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                                                     setting_enabled.get() ? "enabled" : "disabled",
                                                     setting_endpoint.get().c_str(), setting_flush_ms.get(),
                                                     setting_combat_scope.get().c_str());
+#ifdef ZEAL_OTEL_SDK
+                             // The SDK owns delivery here, so report *its* transport. The
+                             // hand-rolled client's counters sit at zero in this build and reading
+                             // them as health is how an exporter that sent nothing looked fine.
+                             {
+                               const auto st = zeal::telemetry::Stats();
+                               Zeal::Game::print_chat("  sent: %llu payloads, %llu failed", st.posted,
+                                                      st.failed);
+                               Zeal::Game::print_chat("  last HTTP status: %i", st.last_status);
+                               if (!st.last_error.empty())
+                                 Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "  last error: %s",
+                                                        st.last_error.c_str());
+                             }
+#else
                              Zeal::Game::print_chat("  sent: %llu log lines, %llu payloads, %llu failed",
                                                     logs_posted.load(), client->posted(), client->failed());
                              Zeal::Game::print_chat("  last HTTP status: %i", client->last_status());
+#endif
                              // Presence and the last four characters: enough to
                              // tell two tokens apart without putting a working
                              // one in the chat log.
@@ -461,11 +476,13 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                                      "  token: stored but could not be read - set it again with "
                                      "/otlp token <token>");
                              }
+#ifndef ZEAL_OTEL_SDK
                              {
                                const std::string err = client->last_error();
                                if (!err.empty())
                                  Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "  last error: %s", err.c_str());
                              }
+#endif
                              Zeal::Game::print_chat("Usage: /otlp on|off|status|endpoint <url>|token <token>|flush <ms>|scope self|all");
                              return true;
                            });

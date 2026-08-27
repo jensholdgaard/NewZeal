@@ -6,6 +6,31 @@
 #pragma comment(lib, "winhttp.lib")
 
 namespace winhttp_client {
+
+namespace {
+std::mutex g_stats_mutex;
+Stats g_stats;
+}  // namespace
+
+Stats GetStats() {
+  std::lock_guard<std::mutex> lock(g_stats_mutex);
+  return g_stats;
+}
+
+void RecordResult(int status, const std::string &error) {
+  std::lock_guard<std::mutex> lock(g_stats_mutex);
+  g_stats.last_status = status;
+  if (status >= 200 && status < 300) {
+    g_stats.posted++;
+    g_stats.last_error.clear();
+  } else {
+    g_stats.failed++;
+    // A rejected export explains itself in the body (a 401 says which auth failed); keeping it is
+    // the difference between "something is wrong" and knowing what.
+    g_stats.last_error = error;
+  }
+}
+
 namespace {
 
 std::wstring Widen(const std::string &s) { return std::wstring(s.begin(), s.end()); }
@@ -130,6 +155,7 @@ void Session::Exchange(std::shared_ptr<http_client::EventHandler> handler) {
   }
 
   auto fail = [&](http_client::SessionState state, const char *why) {
+    RecordResult(0, why ? why : "transport error");
     WinHttpCloseHandle(request);
     WinHttpCloseHandle(connect);
     handler->OnEvent(state, why);
@@ -190,6 +216,19 @@ void Session::Exchange(std::shared_ptr<http_client::EventHandler> handler) {
     }
     response->body_.resize(offset + read);
     if (read == 0) break;
+  }
+
+  // The exchange completed: record what the server said. A non-2xx keeps up to 300 characters of
+  // the body, which is where a gateway names the actual problem.
+  {
+    const int code = static_cast<int>(response->status_code_);
+    std::string why;
+    if (code < 200 || code >= 300) {
+      why = std::string(response->body_.begin(), response->body_.end());
+      if (why.size() > 300) why.resize(300);
+      why = std::to_string(code) + " " + why;
+    }
+    RecordResult(code, why);
   }
 
   WinHttpCloseHandle(request);

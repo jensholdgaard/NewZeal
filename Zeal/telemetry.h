@@ -39,4 +39,15 @@ void Stop();
 // True once Start() has succeeded.
 bool Running();
 
+// What the exporters' transport has actually delivered. Surfaced here rather than by including the
+// transport header elsewhere: this file is the SDK boundary, and instrumentation must not reach
+// past it.
+struct ExportStats {
+  unsigned long long posted = 0;
+  unsigned long long failed = 0;
+  int last_status = 0;
+  std::string last_error;
+};
+ExportStats Stats();
+
 }  // namespace zeal::telemetry
