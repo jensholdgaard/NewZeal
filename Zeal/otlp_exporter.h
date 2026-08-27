@@ -140,6 +140,9 @@ class OtlpExporter {
   static std::string seal_token(const std::string &plain);
   static std::string unseal_token(const std::string &sealed);
   const std::string &auth_token() const;
+  // Drops the SDK providers so the next sampler tick rebuilds them with the current endpoint and
+  // token. Both are captured at construction, so nothing else makes a change take effect.
+  void restart_pipeline();
 
   std::deque<LogRecord> queue;
   mutable std::mutex queue_mutex;

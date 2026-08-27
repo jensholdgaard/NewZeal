@@ -69,7 +69,8 @@ std::string NewInstanceId() {
 
 namespace zeal::telemetry {
 
-bool Start(const std::string &endpoint, const std::string &service_version, std::string &error) {
+bool Start(const std::string &endpoint, const std::string &token, const std::string &service_version,
+           std::string &error) {
   std::lock_guard<std::mutex> lock(g_mutex);
   if (g_running) return true;
 
@@ -79,6 +80,11 @@ bool Start(const std::string &endpoint, const std::string &service_version, std:
     // is not compiled in with WITH_HTTP_CLIENT_CURL=OFF, and the SDK's response to its absence is to
     // terminate the process - which in a game client means the player loses their session.
     auto transport = std::make_shared<winhttp_client::HttpClient>();
+
+    // The gateway authenticates per member. Every signal carries the same credential, so the
+    // headers are built once and copied into each exporter's options below.
+    otlp::OtlpHeaders auth_headers;
+    if (!token.empty()) auth_headers.insert(std::make_pair("Authorization", "Bearer " + token));
 
     // telemetry.sdk.{name,language,version} are filled in by the SDK itself.
     auto resource = opentelemetry::sdk::resource::Resource::Create({
@@ -91,6 +97,7 @@ bool Start(const std::string &endpoint, const std::string &service_version, std:
     otlp::OtlpHttpMetricExporterOptions metric_options;
     metric_options.url = endpoint + "/v1/metrics";
     metric_options.content_type = otlp::HttpRequestContentType::kJson;
+    metric_options.http_headers = auth_headers;
     // Cumulative, despite what it costs in retained state - measured against live combat, delta was
     // worse in a way that matters more.
     //
@@ -129,6 +136,7 @@ bool Start(const std::string &endpoint, const std::string &service_version, std:
     otlp::OtlpHttpExporterOptions trace_options;
     trace_options.url = endpoint + "/v1/traces";
     trace_options.content_type = otlp::HttpRequestContentType::kJson;
+    trace_options.http_headers = auth_headers;
     auto span_exporter = std::unique_ptr<trace_sdk::SpanExporter>(
         new otlp::OtlpHttpExporter(trace_options, transport));
     trace_sdk::BatchSpanProcessorOptions span_batch;

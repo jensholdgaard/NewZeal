@@ -311,7 +311,8 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
     if (is_enabled()) {
       if (!zeal::telemetry::Running()) {
         std::string err;
-        if (!zeal::telemetry::Start(setting_endpoint.get(), ZEAL_VERSION "+" ZEAL_BUILD_VERSION, err))
+        if (!zeal::telemetry::Start(setting_endpoint.get(), auth_token(),
+                                    ZEAL_VERSION "+" ZEAL_BUILD_VERSION, err))
           Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "OpenTelemetry failed to start: %s", err.c_str());
       }
       std::lock_guard<std::mutex> lock(snapshot_mutex);
@@ -333,7 +334,10 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                              if (args.size() == 2 && Zeal::String::compare_insensitive(args[1], "on")) {
                                setting_enabled.set(true);
                                client->set_enabled(true);
-                               Zeal::Game::print_chat("OTLP export enabled -> %s/v1/logs",
+                               // Names the paths actually used. Logs are deliberately not
+                               // exported - chat carries private conversation - and this line used
+                               // to advertise the one path nothing posts to.
+                               Zeal::Game::print_chat("OTLP export enabled -> %s/v1/{metrics,traces}",
                                                       setting_endpoint.get().c_str());
                                return true;
                              }
@@ -346,6 +350,7 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                              if (args.size() == 3 && Zeal::String::compare_insensitive(args[1], "endpoint")) {
                                setting_endpoint.set(args[2]);
                                client->set_endpoint(args[2]);
+                               restart_pipeline();
                                Zeal::Game::print_chat("OTLP endpoint set to %s", args[2].c_str());
                                return true;
                              }
@@ -363,6 +368,7 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                                  token_plain.clear();
                                  token_loaded = true;
                                  client->set_auth_token("");
+                                 restart_pipeline();
                                  Zeal::Game::print_chat("OTLP token cleared.");
                                  return true;
                                }
@@ -379,6 +385,7 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                                token_plain = args[2];
                                token_loaded = true;
                                client->set_auth_token(token_plain);
+                               restart_pipeline();
                                Zeal::Game::print_chat("OTLP token stored (sealed to this Windows account).");
                                return true;
                              }
@@ -592,6 +599,19 @@ std::string OtlpExporter::unseal_token(const std::string &sealed) {
   std::string plain(reinterpret_cast<char *>(out.pbData), out.cbData);
   LocalFree(out.pbData);
   return plain;
+}
+
+// Rebuild the SDK pipeline so an endpoint or token change actually takes effect.
+//
+// The providers capture both when they are constructed - the exporters hold their own copies of the
+// URL and the headers - and telemetry.h says so plainly: Start() is a no-op while running. Without
+// this, /otlp endpoint and /otlp token updated a transport that, in an SDK build, sends nothing,
+// and the real exporter carried on posting to wherever it was first pointed. Stop() here and the
+// periodic sampler starts it again with the new values on its next tick.
+void OtlpExporter::restart_pipeline() {
+#ifdef ZEAL_OTEL_SDK
+  if (zeal::telemetry::Running()) zeal::telemetry::Stop();
+#endif
 }
 
 const std::string &OtlpExporter::auth_token() const {
