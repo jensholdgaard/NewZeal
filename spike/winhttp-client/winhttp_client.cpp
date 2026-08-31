@@ -171,17 +171,24 @@ void Session::Exchange(std::shared_ptr<http_client::EventHandler> handler) {
                           headers.empty() ? 0 : static_cast<DWORD>(-1), const_cast<void *>(body), body_len, body_len,
                           0)) {
     const DWORD err = GetLastError();
+    // The code is the diagnosis: 12029 cannot connect, 12007 name not
+    // resolved, 12157/12175 TLS, 12002 timeout. Without it, "failed" is all
+    // a member can report.
+    static char send_why[64];
+    snprintf(send_why, sizeof(send_why), "WinHttpSendRequest failed (%lu)", err);
     return fail(err == ERROR_WINHTTP_TIMEOUT ? http_client::SessionState::TimedOut
                                              : http_client::SessionState::SendFailed,
-                "WinHttpSendRequest failed");
+                send_why);
   }
 
   if (!WinHttpReceiveResponse(request, nullptr)) {
     const DWORD err = GetLastError();
+    static char recv_why[64];
+    snprintf(recv_why, sizeof(recv_why), "WinHttpReceiveResponse failed (%lu)", err);
     return fail(err == ERROR_WINHTTP_TIMEOUT      ? http_client::SessionState::TimedOut
                 : err == ERROR_WINHTTP_SECURE_FAILURE ? http_client::SessionState::SSLHandshakeFailed
                                                       : http_client::SessionState::NetworkError,
-                "WinHttpReceiveResponse failed");
+                recv_why);
   }
 
   auto response = std::unique_ptr<Response>(new Response());
@@ -265,6 +272,26 @@ HttpClient::HttpClient() {
   if (!winhttp_session_) {  // pre-Win8.1 has no automatic proxy detection
     winhttp_session_ = WinHttpOpen(L"opentelemetry-cpp-winhttp/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                    WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+  }
+
+  if (winhttp_session_) {
+    // Old Windows leaves WinHTTP on TLS 1.0/1.1, which the ingest host
+    // refuses - the visible symptom is WinHttpSendRequest failing with
+    // status 0 forever. Ask for 1.2+1.3, and fall back to 1.2 alone on
+    // systems whose WinHTTP predates the 1.3 flag.
+#ifndef WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2
+#define WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2 0x00000800
+#endif
+#ifndef WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3
+#define WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3 0x00002000
+#endif
+    DWORD protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2 | WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
+    if (!WinHttpSetOption(winhttp_session_, WINHTTP_OPTION_SECURE_PROTOCOLS, &protocols,
+                          sizeof(protocols))) {
+      protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;
+      WinHttpSetOption(winhttp_session_, WINHTTP_OPTION_SECURE_PROTOCOLS, &protocols,
+                       sizeof(protocols));
+    }
   }
 }
 
