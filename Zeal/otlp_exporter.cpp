@@ -1387,10 +1387,23 @@ nlohmann::json OtlpExporter::build_profile_json() const {
   j["base_stats"] = {{"str", ci->BaseSTR}, {"sta", ci->BaseSTA}, {"cha", ci->BaseCHA},
                      {"dex", ci->BaseDEX}, {"int", ci->BaseINT}, {"agi", ci->BaseAGI},
                      {"wis", ci->BaseWIS}};
-  // AA: trained ranks summed over every ability id the client knows, plus unspent points.
-  int aa_spent = 0;
-  for (int id = 1; id <= 226; ++id) aa_spent += ci->GetAbility(id);
-  j["aa"] = {{"spent", aa_spent}, {"unspent", static_cast<int>(ci->AlternateAdvancementUnspent)}};
+  // AA: the same walk /outputfile quarmy does - index and rank for every
+  // trained ability, straight from the client's own array. Names are the
+  // site's job; "spent" here is a sum of ranks, not points, and is labeled
+  // as such.
+  int aa_ranks = 0;
+  nlohmann::json abilities = nlohmann::json::array();
+  if (self->ActorInfo) {
+    for (int i = 0; i <= 227; ++i) {
+      const int rank = static_cast<int>(self->ActorInfo->AAAbilities[i]);
+      if (rank > 0) {
+        aa_ranks += rank;
+        abilities.push_back({i, rank});
+      }
+    }
+  }
+  j["aa"] = {{"spent", aa_ranks}, {"unspent", static_cast<int>(ci->AlternateAdvancementUnspent)}};
+  j["aa_abilities"] = abilities;
   nlohmann::json equipment = nlohmann::json::array();
   for (int i = 0; i < GAME_NUM_INVENTORY_SLOTS; ++i) {
     Zeal::GameStructures::GAMEITEMINFO *item = ci->InventoryItem[i];
