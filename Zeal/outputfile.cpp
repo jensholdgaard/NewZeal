@@ -12,7 +12,7 @@
 
 using Zeal::GameEnums::EquipSlot::EquipSlot;
 
-static std::string IDToEquipSlot(int equipSlot, bool new_format) {
+std::string IDToEquipSlot(int equipSlot, bool new_format) {
   switch (equipSlot) {
     case EquipSlot::LeftEar:
       return new_format ? "Ear1" : "Ear";

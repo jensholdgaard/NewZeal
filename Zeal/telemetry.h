@@ -12,6 +12,8 @@
 #pragma once
 
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace zeal::telemetry {
 
@@ -47,6 +49,13 @@ void Stop();
 
 // True once Start() has succeeded.
 bool Running();
+
+// Emits one log record with `event.name` set - an OpenTelemetry *event*: a named occurrence at a
+// point in time, which is what a character profile snapshot is (a metric would be the wrong
+// signal: it is neither a count nor a measurement, and it carries a body). `body_json` becomes the
+// record body; `attributes` are string attributes on the record. No-op until Start() has run.
+void EmitEvent(const std::string &event_name, const std::string &body_json,
+               const std::vector<std::pair<std::string, std::string>> &attributes);
 
 // What the exporters' transport has actually delivered. Surfaced here rather than by including the
 // transport header elsewhere: this file is the SDK boundary, and instrumentation must not reach

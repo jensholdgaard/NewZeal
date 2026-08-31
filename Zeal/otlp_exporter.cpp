@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "callbacks.h"
+#include "outputfile.h"  // IDToEquipSlot: the profile names slots the way the inventory export does
 #include "chat.h"
 #include "commands.h"
 #include "entity_manager.h"
@@ -307,9 +308,17 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
 
   // Sample live game state on the game thread (MainLoop); the sender thread only ever serializes the
   // cached snapshot, so it never races the game thread reading/freeing character structures.
+  // Profile snapshot: armed on zone-in, taken ten seconds later from the main loop so the
+  // inventory has finished arriving, throttled so a zone-hopping evening is a handful of events.
+  zeal->callbacks->AddGeneric([this]() { profile_due_ms_ = GetTickCount64() + 10000; },
+                              callback_type::EnterZone);
   zeal->callbacks->AddGeneric([this]() {
     sample_game_state();
     if (is_enabled()) fight_tick();
+    if (profile_due_ms_ && GetTickCount64() >= profile_due_ms_) {
+      profile_due_ms_ = 0;
+      emit_profile("zone");
+    }
 #ifdef ZEAL_OTEL_SDK
     zeal::instrumentation::SweepCompleteHealChains();
 #endif
@@ -337,7 +346,7 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
   });
 
   zeal->commands_hook->Add("/otlp", {},
-                           "OTLP/HTTP telemetry export. Usage: /otlp on|off|status|endpoint <url>|flush <ms>|"
+                           "OTLP/HTTP telemetry export. Usage: /otlp on|off|status|profile|endpoint <url>|flush <ms>|"
                            "scope self|all|debug",
                            [this](std::vector<std::string> &args) {
                              if (args.size() == 2 && Zeal::String::compare_insensitive(args[1], "on")) {
@@ -396,6 +405,11 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                                client->set_auth_token(token_plain);
                                restart_pipeline();
                                Zeal::Game::print_chat("OTLP token stored (sealed to this Windows account).");
+                               return true;
+                             }
+                             if (args.size() == 2 && Zeal::String::compare_insensitive(args[1], "profile")) {
+                               last_profile_ms_ = 0;  // an explicit request is never throttled
+                               emit_profile("command");
                                return true;
                              }
                              if (args.size() == 3 && Zeal::String::compare_insensitive(args[1], "flush")) {
@@ -1342,5 +1356,70 @@ std::string OtlpExporter::build_traces_payload() {
   nlohmann::json payload;
   payload["resourceSpans"] = nlohmann::json::array({resource_spans});
   return payload.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+}
+
+// --- character profile event ------------------------------------------------------------------
+
+nlohmann::json OtlpExporter::build_profile_json() const {
+  nlohmann::json j;
+  Zeal::GameStructures::Entity *self = Zeal::Game::get_self();
+  if (!self || !self->CharInfo) return j;
+  auto *ci = self->CharInfo;  // GetAbility is non-const
+  j["name"] = std::string(ci->Name);
+  j["level"] = static_cast<int>(ci->Level);
+  j["class"] = static_cast<int>(ci->Class);
+  j["race"] = static_cast<int>(ci->Race);
+  j["gender"] = static_cast<int>(ci->Gender);
+  j["deity"] = static_cast<int>(ci->Deity);
+  std::string guild_name = Zeal::Game::get_player_guild_name(self->GuildId);
+  j["guild"] = guild_name;
+  j["base_stats"] = {{"str", ci->BaseSTR}, {"sta", ci->BaseSTA}, {"cha", ci->BaseCHA},
+                     {"dex", ci->BaseDEX}, {"int", ci->BaseINT}, {"agi", ci->BaseAGI},
+                     {"wis", ci->BaseWIS}};
+  // AA: trained ranks summed over every ability id the client knows, plus unspent points.
+  int aa_spent = 0;
+  for (int id = 1; id <= 226; ++id) aa_spent += ci->GetAbility(id);
+  j["aa"] = {{"spent", aa_spent}, {"unspent", static_cast<int>(ci->AlternateAdvancementUnspent)}};
+  nlohmann::json equipment = nlohmann::json::array();
+  for (int i = 0; i < GAME_NUM_INVENTORY_SLOTS; ++i) {
+    Zeal::GameStructures::GAMEITEMINFO *item = ci->InventoryItem[i];
+    nlohmann::json slot;
+    slot["slot"] = IDToEquipSlot(i, true);
+    if (item) {
+      slot["id"] = static_cast<int>(item->ID);
+      slot["name"] = std::string(item->Name);
+      slot["count"] = static_cast<int>(item->Common.StackCount);
+    }
+    equipment.push_back(slot);
+  }
+  j["equipment"] = equipment;
+  return j;
+}
+
+void OtlpExporter::emit_profile(const char *reason) {
+#ifdef ZEAL_OTEL_SDK
+  if (!is_enabled()) return;
+  Zeal::GameStructures::Entity *self = Zeal::Game::get_self();
+  if (!self || !self->CharInfo) return;
+  const std::string character = self->CharInfo->Name;
+  const unsigned long long now = GetTickCount64();
+  const bool same_character = character == last_profile_character_;
+  if (same_character && last_profile_ms_ && now - last_profile_ms_ < 10ull * 60ull * 1000ull) return;
+  nlohmann::json body = build_profile_json();
+  if (body.is_null() || body.empty()) return;
+  body["reason"] = reason;
+  zeal::telemetry::EmitEvent("everquest.character.profile", body.dump(),
+                             {{"everquest.character.name", character},
+                              {"everquest.character.class", std::to_string(body["class"].get<int>())},
+                              {"everquest.character.level", std::to_string(body["level"].get<int>())},
+                              {"everquest.profile.reason", reason}});
+  last_profile_ms_ = now;
+  last_profile_character_ = character;
+  if (std::string(reason) == "command")
+    Zeal::Game::print_chat("OTLP: character profile sent (%d slots).",
+                           static_cast<int>(body["equipment"].size()));
+#else
+  (void)reason;
+#endif
 }
 

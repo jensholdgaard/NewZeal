@@ -4,6 +4,10 @@
 
 #include "zeal_settings.h"
 
+// The name of an equipment slot index (0..GAME_NUM_INVENTORY_SLOTS), as the inventory export
+// spells it. Shared with the telemetry profile event so both name slots the same way.
+std::string IDToEquipSlot(int equipSlot, bool new_format);
+
 class OutputFile {
  public:
   OutputFile(class ZealService *zeal);

@@ -146,6 +146,16 @@ class OtlpExporter {
   // token. Both are captured at construction, so nothing else makes a change take effect.
   void restart_pipeline();
 
+  // The character profile event (everquest.character.profile): identity, base stats, AA, and the
+  // 21 equipment slots by item id - what /outputfile quarmy writes to a file, sent as one
+  // OpenTelemetry event instead. Emitted by /otlp profile and ten seconds after every zone-in,
+  // at most once per ten minutes per character. Only in SDK builds; a no-op otherwise.
+  nlohmann::json build_profile_json() const;
+  void emit_profile(const char *reason);
+  unsigned long long profile_due_ms_ = 0;   // armed by EnterZone, fired from the main loop
+  unsigned long long last_profile_ms_ = 0;  // throttle
+  std::string last_profile_character_;
+
   std::deque<LogRecord> queue;
   mutable std::mutex queue_mutex;
 

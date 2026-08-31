@@ -14,7 +14,14 @@
 #include "opentelemetry/exporters/otlp/otlp_http_exporter_options.h"
 #include "opentelemetry/exporters/otlp/otlp_http_metric_exporter.h"
 #include "opentelemetry/exporters/otlp/otlp_http_metric_exporter_options.h"
+#include "opentelemetry/exporters/otlp/otlp_http_log_record_exporter.h"
+#include "opentelemetry/exporters/otlp/otlp_http_log_record_exporter_options.h"
+#include "opentelemetry/logs/provider.h"
 #include "opentelemetry/metrics/provider.h"
+#include "opentelemetry/sdk/logs/batch_log_record_processor_factory.h"
+#include "opentelemetry/sdk/logs/batch_log_record_processor_options.h"
+#include "opentelemetry/sdk/logs/logger_provider.h"
+#include "opentelemetry/sdk/logs/logger_provider_factory.h"
 #include "opentelemetry/sdk/metrics/export/periodic_exporting_metric_reader_factory.h"
 #include "opentelemetry/sdk/metrics/export/periodic_exporting_metric_reader_options.h"
 #include "opentelemetry/sdk/metrics/meter_provider.h"
@@ -40,12 +47,14 @@
 namespace otlp = opentelemetry::exporter::otlp;
 namespace metrics_sdk = opentelemetry::sdk::metrics;
 namespace trace_sdk = opentelemetry::sdk::trace;
+namespace logs_sdk = opentelemetry::sdk::logs;
 
 namespace {
 
 std::mutex g_mutex;
 bool g_running = false;
 std::shared_ptr<metrics_sdk::MeterProvider> g_meter_provider;
+std::shared_ptr<logs_sdk::LoggerProvider> g_logger_provider;
 std::shared_ptr<trace_sdk::TracerProvider> g_tracer_provider;
 
 // service.instance.id must be unique per instance and stable for its lifetime. The semconv registry
@@ -138,8 +147,23 @@ bool Start(const std::string &endpoint, const std::string &token, int export_int
     std::shared_ptr<opentelemetry::metrics::MeterProvider> meter_api = g_meter_provider;
     opentelemetry::metrics::Provider::SetMeterProvider(meter_api);
 
-    // No LoggerProvider: chat is not collected, and nothing else in Zeal emits log records. An
-    // exporter that exists but is never fed is a thing to explain and a thing to get wrong later.
+    // --- logs (events) ---------------------------------------------------------------------------
+    // Chat is not collected. The only log records Zeal emits are events - named occurrences such as
+    // a character profile snapshot - through EmitEvent() below. Batched, so an event costs the
+    // game thread a record, not a round trip.
+    otlp::OtlpHttpLogRecordExporterOptions log_options;
+    log_options.url = endpoint + "/v1/logs";
+    log_options.content_type = otlp::HttpRequestContentType::kJson;
+    log_options.http_headers = auth_headers;
+    auto log_exporter = std::unique_ptr<logs_sdk::LogRecordExporter>(
+        new otlp::OtlpHttpLogRecordExporter(log_options, transport));
+    logs_sdk::BatchLogRecordProcessorOptions log_batch;
+    log_batch.schedule_delay_millis = std::chrono::milliseconds(5000);
+    auto log_processor =
+        logs_sdk::BatchLogRecordProcessorFactory::Create(std::move(log_exporter), log_batch);
+    g_logger_provider = logs_sdk::LoggerProviderFactory::Create(std::move(log_processor), resource);
+    std::shared_ptr<opentelemetry::logs::LoggerProvider> logger_api = g_logger_provider;
+    opentelemetry::logs::Provider::SetLoggerProvider(logger_api);
 
     // --- traces ----------------------------------------------------------------------------------
     // Fight spans.
@@ -175,16 +199,39 @@ void Stop() {
 
   // Shutdown, not just flush: each of these owns a thread, and the game will not wait for them.
   if (g_meter_provider) g_meter_provider->Shutdown(timeout);
+  if (g_logger_provider) g_logger_provider->Shutdown(timeout);
   if (g_tracer_provider) g_tracer_provider->Shutdown(timeout);
 
   opentelemetry::metrics::Provider::SetMeterProvider(
       std::shared_ptr<opentelemetry::metrics::MeterProvider>());
   opentelemetry::trace::Provider::SetTracerProvider(
       std::shared_ptr<opentelemetry::trace::TracerProvider>());
+  opentelemetry::logs::Provider::SetLoggerProvider(
+      std::shared_ptr<opentelemetry::logs::LoggerProvider>());
 
   g_meter_provider.reset();
+  g_logger_provider.reset();
   g_tracer_provider.reset();
   g_running = false;
+}
+
+void EmitEvent(const std::string &event_name, const std::string &body_json,
+               const std::vector<std::pair<std::string, std::string>> &attributes) {
+  // API only from here: a no-op provider answers when Start() has not run, so callers need no
+  // guard and the game code carries no #ifdef.
+  auto provider = opentelemetry::logs::Provider::GetLoggerProvider();
+  auto logger = provider->GetLogger("zeal", "zeal", "");
+  auto record = logger->CreateLogRecord();
+  if (!record) return;
+  record->SetSeverity(opentelemetry::logs::Severity::kInfo);
+  record->SetTimestamp(std::chrono::system_clock::now());
+  record->SetBody(opentelemetry::nostd::string_view(body_json));
+  record->SetAttribute("event.name", opentelemetry::nostd::string_view(event_name));
+  for (const auto &kv : attributes) {
+    record->SetAttribute(opentelemetry::nostd::string_view(kv.first),
+                         opentelemetry::nostd::string_view(kv.second));
+  }
+  logger->EmitLogRecord(std::move(record));
 }
 
 ExportStats Stats() {
