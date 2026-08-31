@@ -536,6 +536,17 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                              return true;
                            });
 
+  // The member-facing spelling. /otlp profile stays as plumbing; magelo is
+  // the word EverQuest players already use for a public character profile.
+  zeal->commands_hook->Add("/magelo", {"/profile"},
+                           "Sends your character profile (gear, stats, AA) to the guild site.",
+                           [this](std::vector<std::string> &args) {
+                             (void)args;
+                             last_profile_ms_ = 0;  // an explicit request is never throttled
+                             emit_profile("command");
+                             return true;
+                           });
+
 
   // Constructed last: the worker calls collect() as soon as it starts, so every piece of state it
   // reads must already exist.
