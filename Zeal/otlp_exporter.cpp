@@ -32,6 +32,7 @@
 #include "game_structures.h"
 #include "json.hpp"
 #include "game_ui.h"  // CXSTR: what the client hands back for a label
+#include "hook_wrapper.h"  // the GetLabel detour's original()
 #include "labels.h"
 #include "string_util.h"
 #include "zeal.h"
@@ -1477,16 +1478,15 @@ nlohmann::json OtlpExporter::build_profile_json() const {
   //
   // Game thread only (labels are UI state); the profile is built from the main loop.
   {
-    auto *hook = ZealService::get_instance()->hooks->hook_map["GetLabel"];
-    if (hook) {
-      auto original = hook->original(sheet_label_stub);
+    auto &hooks = ZealService::get_instance()->hooks->hook_map;
+    if (hooks.count("GetLabel")) {
       auto read = [&](int type) -> std::optional<int> {
         // A fresh CXSTR per call: the destructor is intentionally absent in Zeal's wrapper, so
         // each leaks a few bytes; a profile is a handful of events per session.
         Zeal::GameUI::CXSTR s("");
         bool override_color = false;
         ULONG color = 0;
-        original(type, &s, &override_color, &color);
+        hooks["GetLabel"]->original(sheet_label_stub)(type, &s, &override_color, &color);
         if (!s.Data || s.Data->Length == 0) return std::nullopt;
         std::string text(s.Data->Text, s.Data->Length);
         char *end = nullptr;
