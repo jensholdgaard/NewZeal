@@ -1,103 +1,174 @@
-# CI build workflow that compiles the project and uploads artifacts for testing.
-# Download artifacts from the Actions tab after a successful build.
-
-name: Build
+# Nocturnal Zeal: the guild's Zeal build with the OpenTelemetry C++ SDK linked in over the WinHTTP
+# transport. One branch (main), one workflow, one release (nocturnal-zeal). Every push to main
+# builds, stamps the commit into the binary, and replaces the release assets; the DKP bot links
+# members to that release and checks the stamp.
+name: Nocturnal Zeal
 
 on:
   push:
-    branches-ignore:
-      - 'dependabot/**'
-  pull_request:
-
-env:
-  SOLUTION_FILE_PATH: ./Zeal.sln
-
-permissions:
-  contents: read
+    branches: ['main']
+  workflow_dispatch:
 
 jobs:
   build:
-    name: Build and upload artifacts
     runs-on: windows-2022
-    outputs:
-      artifact: zeal-${{ steps.zeal_version.outputs.version }}-${{ steps.parse_git.outputs.short_hash }}
+    env:
+      OTEL_CPP_VERSION: v1.28.0
+      TRIPLET: x86-windows-static   # static CRT (/MT), unlike the -md triplet used standalone
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: Add msbuild to PATH
-        uses: microsoft/setup-msbuild@v3
+      - uses: microsoft/setup-msbuild@v3
 
-      - name: Parse the git short hash
-        id: parse_git
-        shell: bash
-        run: |
-          SHORT_HASH=$(git rev-parse --short "$GITHUB_SHA")
-          echo short_hash=$SHORT_HASH >> $GITHUB_OUTPUT
-
-      - name: Extract ZEAL_VERSION from source
-        id: zeal_version
-        shell: bash
-        env:
-          SED_PARAMS: 's/^[^"]*"\([^"]*\)".*/\1/'
-        run: |
-          ZEAL_VERSION=$(grep '#define ZEAL_VERSION' Zeal/zeal.h | sed "$SED_PARAMS")
-          echo version=v$ZEAL_VERSION >> $GITHUB_OUTPUT
-
-      # The exporter hand-builds OTLP JSON, so validate our payload shapes against the official
-      # opentelemetry-proto schema — catches "valid JSON, invalid OTLP" before it can ship.
-      - name: Validate OTLP payload shapes against the official schema
-        shell: bash
-        run: |
-          python -m pip install --quiet opentelemetry-proto
-          python ci/otlp_validate.py ci/fixtures/*.json
-
-      - name: Build
-        env:
-          ZEAL_BUILD_VERSION: ${{ steps.parse_git.outputs.short_hash }}
-        run: |
-          msbuild /m /p:Configuration=Release /p:Platform=x86 /p:zeal_build_version=$env:ZEAL_BUILD_VERSION /p:LanguageStandard=stdcpp20 $env:SOLUTION_FILE_PATH /p:ExportHeader="" /p:ScanDependencies=""
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v7
+      # The SDK build is ~25 minutes and depends only on the pinned version and triplet, while the
+      # interesting failures are all in the Zeal link that follows it. Cache it so iterating on the
+      # link costs minutes rather than half-hours.
+      - name: Restore the built SDK
+        id: sdk-cache
+        uses: actions/cache/restore@v4
         with:
-          name: zeal-${{ steps.zeal_version.outputs.version }}-${{ steps.parse_git.outputs.short_hash }}
+          path: |
+            ${{ runner.temp }}/otel-install
+            C:/vcpkg/installed/x86-windows-static
+          key: otel-${{ env.OTEL_CPP_VERSION }}-${{ env.TRIPLET }}-mt-v1
+
+      - name: Fetch opentelemetry-cpp
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch $env:OTEL_CPP_VERSION --recurse-submodules `
+            https://github.com/open-telemetry/opentelemetry-cpp.git (Join-Path $env:RUNNER_TEMP 'otel-cpp')
+
+      - name: protobuf and abseil with the static CRT, no zlib
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install "protobuf:$env:TRIPLET" "abseil:$env:TRIPLET"
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed" }
+
+      - name: Point the build at the SDK (cached or freshly built)
+        shell: pwsh
+        run: |
+          echo "VCPKG_INSTALL=$env:VCPKG_INSTALLATION_ROOT\installed\$env:TRIPLET" >> $env:GITHUB_ENV
+          echo "OTEL_INSTALL=$(Join-Path $env:RUNNER_TEMP 'otel-install')" >> $env:GITHUB_ENV
+
+      - name: Build the SDK (x86, /MT, curl off)
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $src = Join-Path $env:RUNNER_TEMP 'otel-cpp'
+          $bld = Join-Path $env:RUNNER_TEMP 'otel-build'
+          $inst = Join-Path $env:RUNNER_TEMP 'otel-install'
+          $args = @(
+            '-S', $src, '-B', $bld, '-G', 'Visual Studio 17 2022', '-A', 'Win32',
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake",
+            "-DVCPKG_TARGET_TRIPLET=$env:TRIPLET",
+            "-DCMAKE_INSTALL_PREFIX=$inst",
+            '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded',   # match Zeal's /MT
+            '-DWITH_OTLP_HTTP=ON', '-DWITH_HTTP_CLIENT_CURL=OFF', '-DWITH_OTLP_GRPC=OFF',
+            '-DWITH_EXAMPLES=OFF', '-DBUILD_TESTING=OFF', '-DWITH_BENCHMARK=OFF',
+            '-DWITH_FUNC_TESTS=OFF', '-DOPENTELEMETRY_INSTALL=ON', '-DWITH_ABSEIL=ON'
+          )
+          & cmake @args
+          if ($LASTEXITCODE -ne 0) { throw "configure failed" }
+          $cache = Join-Path $bld 'CMakeCache.txt'
+          $curl = (Select-String -Path $cache -Pattern '^WITH_HTTP_CLIENT_CURL:').Line
+          if ($curl -notmatch '=OFF') { throw "curl still on: $curl" }
+          Write-Host "  $curl"
+          & cmake --build $bld --config Release --target install -- /m
+          if ($LASTEXITCODE -ne 0) { throw "SDK build failed" }
+
+      # cache@v4 only saves on success, and every failure so far has been in the link that follows -
+      # so the 25-minute SDK build was repeated each time. Save it as soon as it exists.
+      - name: Save the SDK to cache
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ runner.temp }}/otel-install
+            C:/vcpkg/installed/x86-windows-static
+          key: otel-${{ env.OTEL_CPP_VERSION }}-${{ env.TRIPLET }}-mt-v1
+
+      - name: Build Zeal with the SDK linked in
+        shell: pwsh
+        run: |
+          # Write the archive list to a props file the project imports. Passing it via /p: meant
+          # MSBuild split it on ';' and fed the linker a junk input; a file avoids that entirely.
+          $otel = (Get-ChildItem "$env:OTEL_INSTALL\lib" -Filter *.lib | ForEach-Object { $_.Name })
+          $vcpkg = (Get-ChildItem "$env:VCPKG_INSTALL\lib" -Filter *.lib | ForEach-Object { $_.Name })
+          Write-Host "linking $($otel.Count) SDK archives and $($vcpkg.Count) vcpkg archives"
+          $libs = (($otel + $vcpkg) -join ';')
+          $xml = '<?xml version="1.0" encoding="utf-8"?><Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">' +
+                 '<PropertyGroup><OTEL_LIBS>' + $libs + ';</OTEL_LIBS></PropertyGroup></Project>'
+          Set-Content -Path .\spike\zeal-sdk\otel_libs.generated.props -Value $xml -Encoding UTF8
+
+          $env:ZEAL_OTEL_SDK = '1'
+          # Stamp the commit into the binary (ZEAL_BUILD_VERSION, see Zeal.vcxproj): /zeal version
+          # prints 1.4.5+<commit>, and the DKP bot's /dpstoken gate and /dpsstatus rely on it.
+          $short = (git rev-parse --short $env:GITHUB_SHA).Trim()
+          & msbuild /m /p:Configuration=Release /p:Platform=x86 /p:LanguageStandard=stdcpp20 `
+            /p:ZEAL_OTEL_SDK=1 /p:OTEL_INSTALL="$env:OTEL_INSTALL" /p:VCPKG_INSTALL="$env:VCPKG_INSTALL" `
+            /p:zeal_build_version="$short" `
+            /p:ExportHeader="" /p:ScanDependencies="" .\Zeal.sln
+          if ($LASTEXITCODE -ne 0) { throw "Zeal build with the SDK failed" }
+
+      - name: Report what it costs
+        shell: pwsh
+        run: |
+          $asi = Get-Item .\Release\Zeal.asi
+          $mb = [math]::Round($asi.Length / 1MB, 2)
+          Write-Host "Zeal.asi: $mb MB"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nocturnal-zeal-${{ github.sha }}
           path: |
             Release/Zeal.asi
             Release/Zeal.pdb
-            Zeal/uifiles
-            README.md
 
-  # Guild members install Zeal.asi from the otlp-preview release via the PowerShell installer, which
-  # verifies it against Zeal.asi.sha256. Publishing both from the same build is what makes that
-  # verification meaningful — a hash computed later, from the already-published file, would only ever
-  # confirm the download was not truncated.
-  publish-preview:
-    name: Publish otlp-preview release
+  # The release members download from. One tag, assets replaced in place, notes rewritten with
+  # the commit and SHA-256, so the bot's link never goes stale and a member can verify the file.
+  publish:
+    name: Publish nocturnal-zeal
     needs: build
-    if: github.ref == 'refs/heads/otlp-exporter'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download the build
-        uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v7
         with:
-          name: ${{ needs.build.outputs.artifact }}
+          name: nocturnal-zeal-${{ github.sha }}
           path: dist
-
-      - name: Hash and publish
+      - name: Verify, hash and publish
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
-          cd dist/Release
-          sha256sum Zeal.asi | awk '{print $1"  Zeal.asi"}' > Zeal.asi.sha256
-          cat Zeal.asi.sha256
-          gh release view otlp-preview -R "$REPO" >/dev/null 2>&1 || \
-            gh release create otlp-preview -R "$REPO" --prerelease \
-              --title "OTLP preview" \
-              --notes "Rolling build of the OTLP exporter branch, installed by the guild PowerShell installer."
-          gh release upload otlp-preview Zeal.asi Zeal.asi.sha256 --clobber -R "$REPO"
+          set -euo pipefail
+          cd dist
+          # Refuse to publish a build without the SDK or the stamp - both have happened by hand.
+          otel=$(strings -n 12 Zeal.asi | grep -c opentelemetry || true)
+          short=$(echo "${GITHUB_SHA}" | cut -c1-7)
+          stamp=$(strings -n 8 Zeal.asi | grep -c "1.4.5+${short}" || true)
+          echo "otel strings: $otel, stamp 1.4.5+${short}: $stamp"
+          [ "$otel" -gt 100 ] && [ "$stamp" -ge 1 ]
+          sha=$(sha256sum Zeal.asi | cut -c1-64)
+          echo "$sha  Zeal.asi" > Zeal.asi.sha256
+          notes="Nocturnal Zeal — the guild's Zeal with telemetry. Built from \`main\` @ ${short}; \`/zeal version\` in game says \`1.4.5+${short}\`.
+
+**Install:** drop \`Zeal.asi\` into your EverQuest folder, replacing the one there (keep the old one aside; you still need your normal Zeal install).
+
+**DPS meter setup is one line:** run \`/dpstoken\` in Discord, paste the line it gives you in game:
+
+    /otlp setup <your token>
+
+\`/otlp status\` should show \`last HTTP status: 200\`. \`/magelo\` puts your gear on the guild site.
+
+    SHA256  ${sha}"
+          gh release view nocturnal-zeal -R "$REPO" >/dev/null 2>&1 || \
+            gh release create nocturnal-zeal -R "$REPO" --title "Nocturnal Zeal" --notes "$notes" --target "$GITHUB_SHA"
+          gh release upload nocturnal-zeal Zeal.asi Zeal.asi.sha256 --clobber -R "$REPO"
+          gh release edit nocturnal-zeal -R "$REPO" --title "Nocturnal Zeal" --notes "$notes" --latest --prerelease=false
