@@ -157,6 +157,9 @@ jobs:
           [ "$otel" -gt 100 ] && [ "$stamp" -ge 1 ]
           sha=$(sha256sum Zeal.asi | cut -c1-64)
           echo "$sha  Zeal.asi" > Zeal.asi.sha256
+          # The build the DKP bot's /dpstoken gate expects members to be on; it reads this file
+          # from the release, so nobody edits a config after a push.
+          echo "$short" > build.txt
           notes="$(cat <<EOF
           Nocturnal Zeal — the guild's Zeal with telemetry. Built from \`main\` @ ${short}; \`/zeal version\` in game says \`1.4.5+${short}\`.
 
@@ -173,5 +176,5 @@ jobs:
           )"
           gh release view nocturnal-zeal -R "$REPO" >/dev/null 2>&1 || \
             gh release create nocturnal-zeal -R "$REPO" --title "Nocturnal Zeal" --notes "$notes" --target "$GITHUB_SHA"
-          gh release upload nocturnal-zeal Zeal.asi Zeal.asi.sha256 --clobber -R "$REPO"
+          gh release upload nocturnal-zeal Zeal.asi Zeal.asi.sha256 build.txt --clobber -R "$REPO"
           gh release edit nocturnal-zeal -R "$REPO" --title "Nocturnal Zeal" --notes "$notes" --latest --prerelease=false
