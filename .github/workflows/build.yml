@@ -157,17 +157,20 @@ jobs:
           [ "$otel" -gt 100 ] && [ "$stamp" -ge 1 ]
           sha=$(sha256sum Zeal.asi | cut -c1-64)
           echo "$sha  Zeal.asi" > Zeal.asi.sha256
-          notes="Nocturnal Zeal — the guild's Zeal with telemetry. Built from \`main\` @ ${short}; \`/zeal version\` in game says \`1.4.5+${short}\`.
+          notes="$(cat <<EOF
+          Nocturnal Zeal — the guild's Zeal with telemetry. Built from \`main\` @ ${short}; \`/zeal version\` in game says \`1.4.5+${short}\`.
 
-**Install:** drop \`Zeal.asi\` into your EverQuest folder, replacing the one there (keep the old one aside; you still need your normal Zeal install).
+          **Install:** drop \`Zeal.asi\` into your EverQuest folder, replacing the one there (keep the old one aside; you still need your normal Zeal install).
 
-**DPS meter setup is one line:** run \`/dpstoken\` in Discord, paste the line it gives you in game:
+          **DPS meter setup is one line:** run \`/dpstoken\` in Discord, paste the line it gives you in game:
 
-    /otlp setup <your token>
+              /otlp setup <your token>
 
-\`/otlp status\` should show \`last HTTP status: 200\`. \`/magelo\` puts your gear on the guild site.
+          \`/otlp status\` should show \`last HTTP status: 200\`. \`/magelo\` puts your gear on the guild site.
 
-    SHA256  ${sha}"
+              SHA256  ${sha}
+          EOF
+          )"
           gh release view nocturnal-zeal -R "$REPO" >/dev/null 2>&1 || \
             gh release create nocturnal-zeal -R "$REPO" --title "Nocturnal Zeal" --notes "$notes" --target "$GITHUB_SHA"
           gh release upload nocturnal-zeal Zeal.asi Zeal.asi.sha256 --clobber -R "$REPO"
