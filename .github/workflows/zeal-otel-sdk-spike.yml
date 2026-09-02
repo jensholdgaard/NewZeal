@@ -151,8 +151,13 @@ jobs:
           # The real question: does all of this link into a 32-bit /MT DLL that already carries
           # d3dx8.lib? Failure here is the answer, whatever it says.
           $env:ZEAL_OTEL_SDK = '1'
+          # Stamp the commit into the binary (ZEAL_BUILD_VERSION, see Zeal.vcxproj) the way
+          # build.yml does. Without it every SDK build reported "1.4.5+UNOFFICIAL" and nothing -
+          # not /zeal version, not the bot's /dpsstatus - could tell two builds apart.
+          $short = (git rev-parse --short $env:GITHUB_SHA).Trim()
           & msbuild /m /p:Configuration=Release /p:Platform=x86 /p:LanguageStandard=stdcpp20 `
             /p:ZEAL_OTEL_SDK=1 /p:OTEL_INSTALL="$env:OTEL_INSTALL" /p:VCPKG_INSTALL="$env:VCPKG_INSTALL" `
+            /p:zeal_build_version="$short" `
             /p:ExportHeader="" /p:ScanDependencies="" .\Zeal.sln
           if ($LASTEXITCODE -ne 0) { throw "Zeal build with the SDK failed" }
 
