@@ -208,6 +208,12 @@ bool is_damage_shield_type(unsigned short type) {
   return type >= kDsDecay && type <= kDsThorns;
 }
 
+// The guild's ingest endpoint, compiled in so onboarding is one line: a member
+// runs `/otlp setup <token>` and never has to know or type this. `/otlp
+// endpoint <url>` and `/otlp setup <token> <url>` still override it for anyone
+// pointing at their own collector.
+constexpr char kGuildEndpoint[] = "https://dps.nocturnal-guild.de/otlp";
+
 }  // namespace
 
 OtlpExporter::OtlpExporter(ZealService *zeal) {
@@ -346,9 +352,37 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
   });
 
   zeal->commands_hook->Add("/otlp", {},
-                           "OTLP/HTTP telemetry export. Usage: /otlp on|off|status|profile|endpoint <url>|flush <ms>|"
-                           "scope self|all|debug",
+                           "OTLP/HTTP telemetry export. Usage: /otlp setup <token>|on|off|status|profile|"
+                           "endpoint <url>|flush <ms>|scope self|all|debug",
                            [this](std::vector<std::string> &args) {
+                             // One-line onboarding: endpoint (the guild's, or an
+                             // override), token, and enable, in a single paste.
+                             // This is what the DKP bot's /dpstoken modal hands
+                             // over, so a member never types three commands.
+                             if (args.size() >= 3 && Zeal::String::compare_insensitive(args[1], "setup")) {
+                               const std::string endpoint =
+                                   (args.size() >= 4) ? args[3] : std::string(kGuildEndpoint);
+                               const std::string sealed = seal_token(args[2]);
+                               if (sealed.empty()) {
+                                 Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE,
+                                                        "OTLP setup failed: the token could not be stored (DPAPI).");
+                                 return true;
+                               }
+                               setting_endpoint.set(endpoint);
+                               client->set_endpoint(endpoint);
+                               setting_token_sealed.set(sealed);
+                               token_plain = args[2];
+                               token_loaded = true;
+                               client->set_auth_token(token_plain);
+                               setting_enabled.set(true);
+                               client->set_enabled(true);
+                               restart_pipeline();
+                               Zeal::Game::print_chat(
+                                   "OTLP set up and ON -> %s. Confirm with /otlp status (want HTTP 200); "
+                                   "stop with /otlp off.",
+                                   endpoint.c_str());
+                               return true;
+                             }
                              if (args.size() == 2 && Zeal::String::compare_insensitive(args[1], "on")) {
                                setting_enabled.set(true);
                                client->set_enabled(true);
@@ -532,7 +566,7 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
                                  Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "  last error: %s", err.c_str());
                              }
 #endif
-                             Zeal::Game::print_chat("Usage: /otlp on|off|status|endpoint <url>|token <token>|flush <ms>|scope self|all");
+                             Zeal::Game::print_chat("Usage: /otlp setup <token> [endpoint]|on|off|status|endpoint <url>|token <token>|flush <ms>|scope self|all");
                              return true;
                            });
 
