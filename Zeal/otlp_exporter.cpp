@@ -23,6 +23,7 @@
 #include "callbacks.h"
 #include "outputfile.h"  // IDToEquipSlot: the profile names slots the way the inventory export does
 #include "chat.h"
+#include "chatfilter.h"  // current_string_id: the string-table id behind a printed line
 #include "commands.h"
 #include "entity_manager.h"
 #include "game_addresses.h"  // Zeal::Game::GroupInfo
@@ -246,6 +247,12 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
 #endif
     // DoT ticks and heal amounts never fire the hit event and are only messaged to the involved
     // client, so text is the correct (and self-reporting, non-duplicating) channel for them.
+    {
+      // Still valid here: the chat filter's hook sets it in serverGetString and clears it only
+      // after the print returns, and this callback runs inside that print.
+      auto *cf = ZealService::get_instance()->chatfilter_hook.get();
+      last_string_id = cf ? cf->current_string_id : 0;
+    }
     parse_dot_or_heal(data);
     parse_lockout(data);
     handle_slain_line(data);
@@ -256,7 +263,13 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
   // parsing chat text: exact attacker/target, damage, and skill/spell, incl. charmed pets.
   zeal->callbacks->AddReportSuccessfulHit([this](Zeal::GameStructures::Entity *source,
                                                  Zeal::GameStructures::Entity *target, WORD type, short spell_id,
-                                                 short damage, char) {
+                                                 short raw_damage, char) {
+    // A damage shield's OP_Damage carries the amount NEGATIVE: EQMacEmu Mob::DamageShield sets
+    // `cds->damage = DS` inside its `DS < 0` branch. The old `damage <= 0` guard threw those away,
+    // which is why shields looked like they "never fired on Quarm" - the packet was there all along.
+    // Sign-corrected for the shield types only; anything else at zero or below still drops.
+    const short damage = (raw_damage < 0 && is_damage_shield_type(type)) ? static_cast<short>(-raw_damage)
+                                                                          : raw_damage;
     if (!is_enabled() || !source || damage <= 0) return;
     Zeal::GameStructures::Entity *attacker = source;
     std::string pet_name;  // kept alongside the owner rather than replaced by it
@@ -284,6 +297,7 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
     const char *dtype = is_damage_shield_type(type) ? "damage_shield"
                         : (spell_id > 0)            ? "spell"
                                                     : damage_type_name(type);
+    if (is_damage_shield_type(type)) ds_packet_ms = GetTickCount64();
     // Two forms deliberately: the metric attribute is normalised (see target_display), while fight
     // spans keep the raw spawn name so two mobs of the same name pulled at once stay separate
     // encounters - a trace is about one fight, a metric is about damage onto that kind of target.
@@ -983,12 +997,39 @@ void OtlpExporter::parse_dot_or_heal(const std::string &line) {
   const char *self = Zeal::Game::get_self() ? Zeal::Game::get_self()->Name : nullptr;
   if (!self) return;
 
+  const int sid = last_string_id;
+  // Reveal which server templates the combat lines come from. The heal caster line ("You have
+  // healed X for N") is not in EQMacEmu at all - it is a Quarm addition - and whether it arrives
+  // through the string table decides if it can be matched by id. One raid night with `/otlp debug`
+  // answers that for every line below.
+  if (debug_hits.load() && sid != 0 &&
+      (line.find("heal") != std::string::npos || line.find("non-melee") != std::string::npos ||
+       line.find("has taken") != std::string::npos))
+    Zeal::Game::print_chat("[otlp] sid=%d: %s", sid, line.c_str());
+
+  // YOU_HEALED (419): "You have been healed for %1 points of damage." The one heal message the
+  // server sends by string-table id (EQMacEmu Mob::HealDamage, to the target only). Matched by id,
+  // so a name containing "healed" or a filtered/coloured line cannot fool it.
+  if (sid == 419) {
+    const size_t d = line.find_first_of("0123456789");
+    const long long amount = (d == std::string::npos) ? 0 : read_number(line, d);
+    if (amount > 0) {
+      if (debug_hits.load()) Zeal::Game::print_chat("[otlp] heal(419) -> %s amount=%lld", self, amount);
+      record_heal(self, "incoming", amount);
+    }
+    return;
+  }
+
   // Damage shield, part 2: a flavour line claims the amount buffered from the line before it. The
   // pending slot holds only the most recent 434 message, so an unrelated nuke on the same target
   // cannot be claimed unless it landed immediately before the shield fired.
+  //
+  // Only while no shield packet has arrived lately: once the OP_Damage path is live (see the sign
+  // correction in the hit callback) this text pairing would count every shield hit twice.
   const std::string ds_target = damage_shield_target(line);
   if (!ds_target.empty()) {
-    const bool claimed = !ds_pending_target.empty() && ds_pending_target == ds_target &&
+    const bool packets_flowing = ds_packet_ms != 0 && GetTickCount64() - ds_packet_ms < 5000;
+    const bool claimed = !packets_flowing && !ds_pending_target.empty() && ds_pending_target == ds_target &&
                          GetTickCount64() - ds_pending_ms < 1000;
     if (claimed) {
       record_combat_damage(self, "player", "outgoing", "damage_shield", ds_pending_target, "", ds_pending_amount);

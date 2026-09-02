@@ -213,6 +213,12 @@ class OtlpExporter {
   std::string ds_pending_target;
   long long ds_pending_amount = 0;
   unsigned long long ds_pending_ms = 0;
+  // When a damage shield last arrived as an OP_Damage packet. While packets flow, the text
+  // pairing below stays out of the way so a shield hit is never counted twice.
+  unsigned long long ds_packet_ms = 0;
+  // String-table id of the chat line being handled (0 for plain text), captured from the chat
+  // filter's serverGetString hook before the parsers run. Exact templates beat substring guesses.
+  int last_string_id = 0;
 
   // Log lines delivered, counted here because the client only counts payloads, not records.
   std::atomic<unsigned long long> logs_posted{0};
