@@ -1,3 +1,19 @@
+# Nocturnal Zeal
+
+The guild's Zeal, with telemetry: the OpenTelemetry C++ SDK linked in, a WinHTTP transport, in-game
+token configuration, `/magelo` character profiles and a DPS meter feeding the guild dashboards.
+
+**Members:** download `Zeal.asi` from the one release,
+<https://github.com/jensholdgaard/NewZeal/releases/tag/nocturnal-zeal>, drop it into your EverQuest
+folder (replacing the one there; keep a copy), run `/dpstoken` in Discord and paste the line it gives
+you in game. `/zeal version` shows which build you have (`1.4.5+<commit>`).
+
+**Developers:** one branch (`main`), one workflow (`.github/workflows/build.yml`, the SDK build), one
+release; every push to `main` rebuilds and replaces the release assets. Older branches survive as
+`archive/*` tags. See `docs/otlp-exporter.md` and `docs/telemetry-sources.md`.
+
+---
+
 
 ### Installation
 - Download [latest official release](https://github.com/coastalredwood/Zeal/releases/latest) zip
