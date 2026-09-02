@@ -18,6 +18,7 @@ server never sends has no memory address to read.
 | Your own HP | exact `cur_hp` in `SpawnHPUpdate_Struct` for self | yes | memory (self struct) |
 | DoT tick (yours) | `YOUR_HIT_DOT` = **9072**, "%1 has taken %2 damage from your %3." | yes | text; id available |
 | Non-melee announcement | `OTHER_HIT_NONMELEE` = **434** "%1 was hit by non-melee for %2 points of damage."; `YOU_HIT_NONMELEE` = **12481** to the victim | yes | ids available; the packet already carries the same hit |
+| **Character sheet** (effective STR…CHA, resists, HP, mana, AC, ATK) | not sent by the server as a bundle; the **client computes it** for the inventory window, and the label function (`GetLabel`, EQType ids 5–26) returns each value | yes | `/magelo` profile `sheet` (since the sheet commit) |
 | Death | `OP_Death` (`Death_Struct`: spell_id, damage, killer) | yes | slain-line + packet |
 
 ## Consequences

@@ -13,6 +13,7 @@
 #pragma comment(lib, "crypt32.lib")
 
 #include <cctype>
+#include <optional>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -30,6 +31,7 @@
 #include "game_functions.h"
 #include "game_structures.h"
 #include "json.hpp"
+#include "game_ui.h"  // CXSTR: what the client hands back for a label
 #include "labels.h"
 #include "string_util.h"
 #include "zeal.h"
@@ -1446,6 +1448,9 @@ std::string OtlpExporter::build_traces_payload() {
 
 // --- character profile event ------------------------------------------------------------------
 
+// Only its type matters: the hook's original() is a template over the function pointer.
+static bool sheet_label_stub(int, Zeal::GameUI::CXSTR *, bool *, ULONG *) { return false; }
+
 nlohmann::json OtlpExporter::build_profile_json() const {
   nlohmann::json j;
   Zeal::GameStructures::Entity *self = Zeal::Game::get_self();
@@ -1462,6 +1467,47 @@ nlohmann::json OtlpExporter::build_profile_json() const {
   j["base_stats"] = {{"str", ci->BaseSTR}, {"sta", ci->BaseSTA}, {"cha", ci->BaseCHA},
                      {"dex", ci->BaseDEX}, {"int", ci->BaseINT}, {"agi", ci->BaseAGI},
                      {"wis", ci->BaseWIS}};
+  // The character sheet exactly as the client draws it. Base stats plus item sums is not what
+  // members see: the game clamps every stat at its cap, computes AC from item AC, defense and
+  // agility, HP from level, class, stamina and items, and adds race and class resists. All of
+  // that already exists in the client - it is what the inventory window's labels show - and the
+  // label function Zeal detours (GetLabel, 0x436680) returns each value as text for a label id.
+  // Ids are the default UI's EQType table (EQUI_Inventory.xml): 5..11 STR STA DEX AGI WIS INT
+  // CHA, 12..16 PR DR FR CR MR, 17/18 HP cur/max, 20/21 mana cur/max, 25 AC, 26 ATK.
+  //
+  // Game thread only (labels are UI state); the profile is built from the main loop.
+  {
+    auto *hook = ZealService::get_instance()->hooks->hook_map["GetLabel"];
+    if (hook) {
+      auto original = hook->original(sheet_label_stub);
+      auto read = [&](int type) -> std::optional<int> {
+        // A fresh CXSTR per call: the destructor is intentionally absent in Zeal's wrapper, so
+        // each leaks a few bytes; a profile is a handful of events per session.
+        Zeal::GameUI::CXSTR s("");
+        bool override_color = false;
+        ULONG color = 0;
+        original(type, &s, &override_color, &color);
+        if (!s.Data || s.Data->Length == 0) return std::nullopt;
+        std::string text(s.Data->Text, s.Data->Length);
+        char *end = nullptr;
+        const long v = std::strtol(text.c_str(), &end, 10);  // "1234/5678" -> 1234
+        if (end == text.c_str()) return std::nullopt;
+        return static_cast<int>(v);
+      };
+      static const std::pair<const char *, int> kSheet[] = {
+          {"str", 5},  {"sta", 6},  {"dex", 7},  {"agi", 8},  {"wis", 9},   {"int", 10},
+          {"cha", 11}, {"pr", 12},  {"dr", 13},  {"fr", 14},  {"cr", 15},   {"mr", 16},
+          {"hp", 17},  {"max_hp", 18}, {"mana", 20}, {"max_mana", 21}, {"ac", 25}, {"atk", 26}};
+      nlohmann::json sheet;
+      for (const auto &[key, id] : kSheet)
+        if (const auto v = read(id)) sheet[key] = *v;
+      if (!sheet.empty()) {
+        j["sheet"] = sheet;
+        if (debug_hits.load())
+          Zeal::Game::print_chat("[otlp] sheet: %s", sheet.dump().c_str());
+      }
+    }
+  }
   // AA: the same walk /outputfile quarmy does - index and rank for every
   // trained ability, straight from the client's own array. Names are the
   // site's job; "spent" here is a sum of ranks, not points, and is labeled
