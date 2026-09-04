@@ -26,6 +26,12 @@ void SetCharacter(const std::string &name);
 void SetCharacterState(const std::string &zone, long long attack, bool have_attack, long long haste,
                        bool have_haste);
 
+// A raid lockout as the server announced it at the kill: unix seconds of the kill and of the
+// expiry. Observed by two gauges (everquest.raid.kill.timestamp, everquest.raid.lockout.expiry,
+// both in seconds, per target) until the lockout lifts, then dropped - the spawn-timer panels
+// count down from these. Safe to call again for the same target; the newer kill wins.
+void RecordRaidLockout(const std::string &target, long long kill_unix_s, long long expiry_unix_s);
+
 // The seven base stats. Recorded only when one actually changes - swapping gear, a buff landing,
 // levelling - because a stat that has not moved is not news, and emitting it on a timer would make
 // "when did this change?" impossible to answer. Safe and cheap to call every tick.

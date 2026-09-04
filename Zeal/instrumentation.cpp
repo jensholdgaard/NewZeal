@@ -172,6 +172,43 @@ void StatCallback(opentelemetry::metrics::ObserverResult result, void *) {
   }
 }
 
+// Raid lockouts: target -> (kill, expiry), unix seconds. Written from the game thread when the
+// server's lockout notice arrives, read by the two callbacks on the SDK's collection thread.
+struct Lockout {
+  long long kill_s;
+  long long expiry_s;
+};
+std::mutex g_lockout_mutex;
+std::map<std::string, Lockout> g_lockouts;
+
+void LockoutCallback(opentelemetry::metrics::ObserverResult result, bool expiry) {
+  const long long now_s = static_cast<long long>(
+      std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch())
+          .count());
+  std::map<std::string, Lockout> snapshot;
+  {
+    std::lock_guard<std::mutex> lock(g_lockout_mutex);
+    // A lifted lockout stops being reported: an asynchronous gauge exports only what its
+    // callback observes, so the target simply drops off the spawn-timer list.
+    for (auto it = g_lockouts.begin(); it != g_lockouts.end();) {
+      if (it->second.expiry_s <= now_s)
+        it = g_lockouts.erase(it);
+      else
+        ++it;
+    }
+    snapshot = g_lockouts;
+  }
+  auto observer = opentelemetry::nostd::get<
+      opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObserverResultT<int64_t>>>(result);
+  for (const auto &[target, lockout] : snapshot) {
+    Attributes attrs = {{everquest_semconv::kEverquestRaidTarget, target.c_str()}};
+    observer->Observe(expiry ? lockout.expiry_s : lockout.kill_s,
+                      opentelemetry::common::KeyValueIterableView<Attributes>(attrs));
+  }
+}
+void KillTimestampCallback(opentelemetry::metrics::ObserverResult result, void *) { LockoutCallback(result, false); }
+void LockoutExpiryCallback(opentelemetry::metrics::ObserverResult result, void *) { LockoutCallback(result, true); }
+
 void AttackCallback(opentelemetry::metrics::ObserverResult result, void *) { ObserveGauge(result, false); }
 void HasteCallback(opentelemetry::metrics::ObserverResult result, void *) { ObserveGauge(result, true); }
 
@@ -200,6 +237,24 @@ void EnsureGauges() {
                  ->CreateInt64ObservableGauge(everquest_semconv::kEverquestCharacterStatMetric,
                                               "character base stat", "1");
     g->AddCallback(StatCallback, nullptr);
+    return g;
+  }();
+  // The spawn timers. These were parsed but never exported after the move to the SDK
+  // (2026-09-04): the maps in the exporter were write-only and the dashboard read "no data".
+  static auto kills = [] {
+    auto g = metrics_api::Provider::GetMeterProvider()
+                 ->GetMeter(kScopeName, kScopeVersion)
+                 ->CreateInt64ObservableGauge(everquest_semconv::kEverquestRaidKillTimestampMetric,
+                                              "unix time of the kill that started a raid lockout", "s");
+    g->AddCallback(KillTimestampCallback, nullptr);
+    return g;
+  }();
+  static auto lockouts = [] {
+    auto g = metrics_api::Provider::GetMeterProvider()
+                 ->GetMeter(kScopeName, kScopeVersion)
+                 ->CreateInt64ObservableGauge(everquest_semconv::kEverquestRaidLockoutExpiryMetric,
+                                              "unix time at which a raid lockout expires", "s");
+    g->AddCallback(LockoutExpiryCallback, nullptr);
     return g;
   }();
   (void)attack;
@@ -263,6 +318,11 @@ void SetCharacterStats(int strength, int stamina, int dexterity, int agility, in
   const int values[7] = {strength, stamina, dexterity, agility, wisdom, intelligence, charisma};
   for (int i = 0; i < 7; ++i) g_state.stats[i] = values[i];
   g_state.valid = true;
+}
+
+void RecordRaidLockout(const std::string &target, long long kill_unix_s, long long expiry_unix_s) {
+  std::lock_guard<std::mutex> lock(g_lockout_mutex);
+  g_lockouts[target] = Lockout{kill_unix_s, expiry_unix_s};
 }
 
 void RecordFightTotals(const std::string &target, const std::string &zone, double duration_s,
