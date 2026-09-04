@@ -1187,6 +1187,11 @@ void OtlpExporter::parse_lockout(const std::string &line) {
     // death rather than the time of looting.
     raid_kills[target] = now_s;
   }
+#ifdef ZEAL_OTEL_SDK
+  // The maps above were write-only since the SDK migration; this is what the
+  // spawn-timer panels actually read.
+  zeal::instrumentation::RecordRaidLockout(target, now_s, expiry);
+#endif
   if (debug_hits.load())
     Zeal::Game::print_chat("[otlp] lockout %s in %lld s (expires at unix %lld)", target.c_str(), seconds, expiry);
 }
