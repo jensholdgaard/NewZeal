@@ -384,10 +384,15 @@ void Melody::tick() {
   // Execute a pending use_item() call here
   if (use_item_index >= 0) {
     stop_current_cast();  // Terminate bard song (if active) in order to cast.
-    // Bandoleer: weapons back from the previous song's swap, then the set filed for this step (if
-    // any) in before the click, so the clicky's song lands with its instrument.
+    // Bandoleer: weapons back from the previous song's swap first, on a frame of their own - two
+    // swaps in one frame click bag slots the inventory window has not refreshed, and the
+    // displaced weapon ends up on the cursor. Then the set filed for this step (if any) goes in
+    // right before the click, so the clicky's song lands with its instrument.
     if (ZealService::get_instance()->bandoleer) {
-      ZealService::get_instance()->bandoleer->restore_if_swapped();
+      if (ZealService::get_instance()->bandoleer->is_swapped()) {
+        ZealService::get_instance()->bandoleer->restore_if_swapped();
+        return;  // The click waits one tick; use_item_index stays queued.
+      }
       if (!use_item_key.empty()) ZealService::get_instance()->bandoleer->notify_item_step(use_item_key);
     }
     Zeal::GameStructures::GAMEITEMINFO *used_item = nullptr;

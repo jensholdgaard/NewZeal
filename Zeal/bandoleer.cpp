@@ -230,6 +230,21 @@ bool Bandoleer::swap_item(int bag_slot_id, int equip_slot_index) {
     success = true;
   }
 
+  // Nothing may be left on the cursor: a refused put-back (a bag slot the window has not
+  // refreshed yet, a slot that will not take the item) used to strand the weapon there, which
+  // then blocked every later swap. Auto-inventory finds it a slot; the next swap finds it by
+  // id and name wherever it landed.
+  if (char_info->CursorItem) {
+    if (Zeal::Game::can_inventory_item(char_info->CursorItem)) {
+      Zeal::Game::print_chat("Bandoleer: %s did not fit back in its slot, auto-inventoried.",
+                             char_info->CursorItem->Name);
+      Zeal::Game::GameInternal::auto_inventory(char_info, &char_info->CursorItem, 0);
+    } else {
+      Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "Bandoleer: %s is stuck on your cursor.",
+                             char_info->CursorItem->Name);
+    }
+  }
+
   wnd_mgr->ShiftKeyState = shift;
   wnd_mgr->ControlKeyState = ctrl;
   wnd_mgr->AltKeyState = alt;

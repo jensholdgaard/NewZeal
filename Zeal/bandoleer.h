@@ -29,6 +29,8 @@ class Bandoleer {
 
   // Called by Melody when it ends to ensure weapons are restored.
   void notify_melody_stop();
+  // True while a set is swapped in and the weapons are still to be restored.
+  bool is_swapped() const { return state == State::Swapped; }
 
  private:
   // Equipment slot indices managed by the bandoleer (0-based InventoryItem indices).
