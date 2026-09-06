@@ -164,6 +164,10 @@ int Bandoleer::find_item_in_bags(int item_id, const std::string &item_name) {
 
   for (int bag_i = 0; bag_i < GAME_NUM_INVENTORY_PACK_SLOTS; bag_i++) {
     Zeal::GameStructures::GAMEITEMINFO *container = char_info->InventoryPackItem[bag_i];
+    // A weapon auto-inventoried after a refused put-back lands in a top-level slot as readily as
+    // in a bag; a restore that only looked inside bags never found it and left the instrument in.
+    if (container && container->Type != 1 && container->ID == item_id && item_name == container->Name)
+      return 22 + bag_i;  // The general inventory slot ids, as /useitem numbers them.
     if (!container || container->Type != 1) continue;
     for (int slot_i = 0; slot_i < container->Container.Capacity; slot_i++) {
       Zeal::GameStructures::GAMEITEMINFO *item = container->Container.Item[slot_i];
@@ -302,11 +306,17 @@ void Bandoleer::swap_weapons_back() {
     Zeal::GameStructures::GAMEITEMINFO *equipped = char_info->InventoryItem[record.equip_slot];
     if (equipped && equipped->ID == record.orig_id && record.orig_name == equipped->Name) continue;
 
-    // Find the original weapon in bags and swap it back.
+    // Find the original weapon in the inventory and swap it back.
     int bag_slot_id = find_item_in_bags(record.orig_id, record.orig_name);
-    if (bag_slot_id < 0) continue;
+    if (bag_slot_id < 0) {
+      Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "Bandoleer: could not find %s to put back in %s.",
+                             record.orig_name.c_str(), get_slot_label(record.equip_slot));
+      continue;
+    }
 
-    swap_item(bag_slot_id, record.equip_slot);
+    if (!swap_item(bag_slot_id, record.equip_slot))
+      Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "Bandoleer: could not swap %s back into %s.",
+                             record.orig_name.c_str(), get_slot_label(record.equip_slot));
   }
 
   active_swaps.clear();
