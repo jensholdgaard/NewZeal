@@ -1,6 +1,8 @@
 #pragma once
 #include <Windows.h>
 
+#include "game_packets.h"  // Death_Struct: the kill signal
+
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -101,6 +103,9 @@ class OtlpExporter {
   struct ActiveFight {
     std::string span_id;
     std::string display;  // normalized display name, for matching "slain" chat lines
+    // The server's spawn id for this individual: what the death packet names, and what tells
+    // this mob from the next one with the same name. 0 until a hit event carried it.
+    unsigned short spawn_id = 0;
     unsigned long long start_ns = 0, last_ns = 0;
     long long dmg_out = 0, dmg_in = 0;
     // Per attacker: when they last landed a hit, and how long they have been engaged. This is the
@@ -110,14 +115,17 @@ class OtlpExporter {
   };
 
   // Called from the hit event (game thread); opens the fight span on first damage.
-  void note_fight_damage(const std::string &raw_target, const std::string &attacker, bool outgoing,
-                         long long dmg);
+  void note_fight_damage(const std::string &raw_target, unsigned short spawn_id, const std::string &attacker,
+                         bool outgoing, long long dmg);
   // Game-thread tick: zone-session transitions and idle-fight sweep.
   void fight_tick();
   // Ends one active fight into completed_spans. Caller holds no lock (game thread only state).
   void end_fight(const std::string &key, const char *outcome, unsigned long long end_ns);
-  // Chat hook: "X has been slain..." / "You have slain X!" closes the matching fight.
+  // Chat hook: "X has been slain..." / "You have slain X!" closes the matching fight. The fallback:
+  // the death packet closes it by spawn id first.
   void handle_slain_line(const std::string &line);
+  // OP_Death for the zone: ends the fight for exactly that spawn id and emits the death event.
+  void handle_death(const Zeal::Packets::Death_Struct *d);
   // Drains completed spans into an OTLP traces payload ("" if none).
   std::string build_traces_payload();
 

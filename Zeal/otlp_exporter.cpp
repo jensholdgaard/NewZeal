@@ -85,6 +85,10 @@ std::string hex_id(int bytes) {
 // (DoT ticks) already arrive in this form, so this makes both sources agree.
 std::string target_display(const std::string &raw) {
   std::string d = raw;
+  // The client prefixes `#` on spawns the server flags as special (raid bosses among them), and
+  // only on some code paths: the hit event's Entity name carries it, a chat line does not. One
+  // kind, one label - so it goes.
+  while (!d.empty() && d.front() == '#') d.erase(0, 1);
   while (!d.empty() && isdigit(static_cast<unsigned char>(d.back()))) d.pop_back();
   for (auto &c : d)
     if (c == '_') c = ' ';
@@ -94,6 +98,7 @@ std::string target_display(const std::string &raw) {
 // "a_temple_guard00" -> "a temple guard" (lowercase, underscores to spaces, trailing digits dropped)
 std::string display_of(const std::string &raw) {
   std::string d = raw;
+  while (!d.empty() && d.front() == '#') d.erase(0, 1);
   while (!d.empty() && isdigit(static_cast<unsigned char>(d.back()))) d.pop_back();
   for (auto &c : d) c = (c == '_') ? ' ' : static_cast<char>(tolower(static_cast<unsigned char>(c)));
   return d;
@@ -326,8 +331,23 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
     // when it hits us).
     const bool outgoing = (direction[0] == 'o');
     const std::string mob = outgoing ? raw_tgt : std::string(source->Name);
-    if (!mob.empty()) note_fight_damage(mob, src, outgoing, damage);
+    // The spawn id is what tells this mob from the next one of the same name, and what the
+    // death packet will name when it dies.
+    const unsigned short mob_id = outgoing ? (target ? target->SpawnId : 0) : source->SpawnId;
+    if (!mob.empty()) note_fight_damage(mob, mob_id, src, outgoing, damage);
   });
+
+  // The death packet: the server sends OP_Death to the whole zone for every death, naming the
+  // spawn that died and the spawn that killed it. It closes the fight for exactly that spawn id -
+  // no name matching - and is the kill signal downstream (everquest.combat.death), where a lockout
+  // notice reaches only those who earned one and a chat line names the kind, not the individual.
+  zeal->callbacks->AddPacket(
+      [this](UINT opcode, char *buffer, UINT len) {
+        if (opcode == Zeal::Packets::DeathDamage && len >= sizeof(Zeal::Packets::Death_Struct))
+          handle_death(reinterpret_cast<const Zeal::Packets::Death_Struct *>(buffer));
+        return false;  // never consumed: the client's own handler runs as before
+      },
+      callback_type::WorldMessage);
 
   // Sample live game state on the game thread (MainLoop); the sender thread only ever serializes the
   // cached snapshot, so it never races the game thread reading/freeing character structures.
@@ -1286,8 +1306,8 @@ std::string OtlpExporter::build_metrics_payload() {
 }
 
 
-void OtlpExporter::note_fight_damage(const std::string &raw_target, const std::string &attacker,
-                                     bool outgoing, long long dmg) {
+void OtlpExporter::note_fight_damage(const std::string &raw_target, unsigned short spawn_id,
+                                     const std::string &attacker, bool outgoing, long long dmg) {
   const unsigned long long now = now_unix_nano();
   ActiveFight &f = active_fights[raw_target];
   if (f.start_ns == 0) {
@@ -1295,6 +1315,7 @@ void OtlpExporter::note_fight_damage(const std::string &raw_target, const std::s
     f.display = display_of(raw_target);
     f.start_ns = now;
   }
+  if (f.spawn_id == 0) f.spawn_id = spawn_id;
   f.last_ns = now;
   (outgoing ? f.dmg_out : f.dmg_in) += dmg;
 
@@ -1337,12 +1358,23 @@ void OtlpExporter::end_fight(const std::string &key, const char *outcome, unsign
       // divide by zero and report an infinite rate.
       active.emplace_back(who, act.second > 0.0 ? act.second : 1.0);
     }
-    zeal::instrumentation::RecordFightTotals(key, zone_active, duration_s, active);
+    // The metric is about the kind of target (normalised name: no instance digits, no `#`), the
+    // span about the individual (raw name + spawn id). Keying the metric on the raw name minted a
+    // timeseries per spawn - some 2,000 series that answered nothing - until 2026-09-06.
+    const std::string kind = target_display(key);
+    zeal::instrumentation::RecordFightTotals(kind, zone_active, duration_s, active);
+    zeal::instrumentation::RecordFightSpan(kind, key, f.spawn_id, zone_active, outcome, f.start_ns,
+                                           finished_ns, f.dmg_out, f.dmg_in);
   }
   (void)sp;
 #else
-  sp.str_attrs = {{everquest_semconv::kEverquestCombatTarget, key}, {everquest_semconv::kEverquestZoneName, zone_active}, {"everquest.fight.outcome", outcome}};
-  sp.int_attrs = {{"everquest.fight.damage.dealt", f.dmg_out}, {"everquest.fight.damage.taken", f.dmg_in}};
+  sp.str_attrs = {{everquest_semconv::kEverquestCombatTarget, target_display(key)},
+                  {everquest_semconv::kEverquestSpawnName, key},
+                  {everquest_semconv::kEverquestZoneName, zone_active},
+                  {"everquest.fight.outcome", outcome}};
+  sp.int_attrs = {{"everquest.fight.damage.dealt", f.dmg_out},
+                  {"everquest.fight.damage.taken", f.dmg_in},
+                  {everquest_semconv::kEverquestSpawnId, static_cast<long long>(f.spawn_id)}};
   {
     std::lock_guard<std::mutex> lock(spans_mutex);
     completed_spans.push_back(std::move(sp));
@@ -1394,6 +1426,54 @@ void OtlpExporter::fight_tick() {
     ++it;
     if (idle) end_fight(key, "idle", 0);
   }
+}
+
+void OtlpExporter::handle_death(const Zeal::Packets::Death_Struct *d) {
+  if (!is_enabled() || !d) return;
+  const unsigned long long now = now_unix_nano();
+  // The fight this ends, by spawn id: the individual, not the kind. Found first, ended after:
+  // end_fight erases from the map being searched.
+  std::string ended;
+  for (const auto &[key, f] : active_fights) {
+    if (f.spawn_id != 0 && f.spawn_id == d->spawn_id) {
+      ended = key;
+      break;
+    }
+  }
+  if (!ended.empty()) end_fight(ended, "killed", now);
+#ifdef ZEAL_OTEL_SDK
+  Zeal::GameStructures::Entity *dead = Zeal::Game::get_entity_by_id(static_cast<short>(d->spawn_id));
+  if (!dead) return;  // already gone from the entity list: nothing to name
+  const std::string raw = dead->Name;
+  const std::string kind = target_display(raw);
+  Zeal::GameStructures::Entity *killer =
+      d->killer_id ? Zeal::Game::get_entity_by_id(static_cast<short>(d->killer_id)) : nullptr;
+  const std::string killer_name = killer ? target_display(killer->Name) : std::string();
+  const std::string zone = current_zone_name();
+  nlohmann::json body;
+  body["target"] = kind;
+  body["spawn_id"] = static_cast<int>(d->spawn_id);
+  body["spawn_name"] = raw;
+  body["killer"] = killer_name;
+  body["killer_id"] = static_cast<int>(d->killer_id);
+  body["zone"] = zone;
+  body["is_pc"] = d->is_PC != 0;
+  body["damage"] = static_cast<int>(d->damage);
+  body["spell_id"] = static_cast<int>(d->spell_id);
+  std::vector<std::pair<std::string, std::string>> attrs = {
+      {everquest_semconv::kEverquestCombatTarget, kind},
+      {everquest_semconv::kEverquestSpawnId, std::to_string(static_cast<unsigned>(d->spawn_id))},
+      {everquest_semconv::kEverquestSpawnName, raw},
+      {everquest_semconv::kEverquestZoneName, zone},
+  };
+  if (!killer_name.empty()) attrs.push_back({everquest_semconv::kEverquestCombatSource, killer_name});
+  Zeal::GameStructures::Entity *self = Zeal::Game::get_self();
+  if (self && self->CharInfo) attrs.push_back({everquest_semconv::kEverquestCharacterName, self->CharInfo->Name});
+  zeal::telemetry::EmitEvent("everquest.combat.death", body.dump(), attrs);
+  if (debug_hits.load())
+    Zeal::Game::print_chat("[otlp] death %s (spawn %u) by %s", kind.c_str(), static_cast<unsigned>(d->spawn_id),
+                           killer_name.c_str());
+#endif
 }
 
 void OtlpExporter::handle_slain_line(const std::string &line) {

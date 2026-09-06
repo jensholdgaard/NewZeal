@@ -32,3 +32,15 @@ server never sends has no memory address to read.
   hooks `serverGetString` (the string-table lookup) and the exporter reads the
   id in its print callback; plain messages have id 0 and keep their text parser.
 - **No "memory address for heals".** Everyone else's HP arrives as a percentage.
+
+## Spawn ids and deaths (2026-09-06)
+
+- `everquest.combat.target` is the *kind* of mob: instance digits and the `#` the client puts on
+  special spawns are both dropped, on every path, so one boss is one label.
+- Every fight is a span (`fight <target>`) in the SDK build, carrying `everquest.spawn.id` and
+  `everquest.spawn.name` - the individual. Two mobs of the same name pulled together are two
+  spans. The fight metrics (`everquest.fight.*`) are keyed on the kind, not the individual.
+- `everquest.combat.death` is an event from the server's death packet (OP_Death), sent to the
+  whole zone for every death: the spawn id and name of what died, the killer, the zone. It closes
+  the fight for that spawn id and is the kill signal for the DKP bot's kill log. Several clients
+  in the zone emit the same death; consumers dedupe on zone, spawn id and time.

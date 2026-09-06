@@ -53,6 +53,10 @@ inline constexpr const char *kEverquestHealChainPosition = "everquest.heal.chain
 
 inline constexpr const char *kEverquestRaidTarget = "everquest.raid.target";
 
+inline constexpr const char *kEverquestSpawnId = "everquest.spawn.id";
+
+inline constexpr const char *kEverquestSpawnName = "everquest.spawn.name";
+
 inline constexpr const char *kEverquestSpellName = "everquest.spell.name";
 
 inline constexpr const char *kEverquestZoneId = "everquest.zone.id";

@@ -354,6 +354,40 @@ void RecordFightTotals(const std::string &target, const std::string &zone, doubl
   }
 }
 
+void RecordFightSpan(const std::string &target, const std::string &spawn_name, unsigned spawn_id,
+                     const std::string &zone, const char *outcome, unsigned long long start_unix_ns,
+                     unsigned long long end_unix_ns, long long damage_dealt, long long damage_taken) {
+  if (end_unix_ns <= start_unix_ns) return;
+  std::string character;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    character = g_character;
+  }
+  Attributes attrs = {
+      {everquest_semconv::kEverquestCombatTarget, target.c_str()},
+      {everquest_semconv::kEverquestSpawnName, spawn_name.c_str()},
+      {everquest_semconv::kEverquestZoneName, zone.c_str()},
+      {everquest_semconv::kEverquestFightOutcome, outcome},
+      {everquest_semconv::kEverquestFightDamageDealt, damage_dealt},
+      {everquest_semconv::kEverquestFightDamageTaken, damage_taken},
+  };
+  if (spawn_id != 0) attrs.push_back({everquest_semconv::kEverquestSpawnId, static_cast<long long>(spawn_id)});
+  if (!character.empty()) attrs.push_back({everquest_semconv::kEverquestCharacterName, character.c_str()});
+  // Both ends are known: the system clock places the span on the timeline, the steady clock gives
+  // the SDK the duration it refuses to compute from the wall clock.
+  const auto length = std::chrono::nanoseconds(end_unix_ns - start_unix_ns);
+  const auto steady_end = std::chrono::steady_clock::now();
+  trace_api::StartSpanOptions options;
+  options.start_steady_time = opentelemetry::common::SteadyTimestamp(steady_end - length);
+  options.start_system_time = opentelemetry::common::SystemTimestamp(std::chrono::system_clock::time_point(
+      std::chrono::duration_cast<std::chrono::system_clock::duration>(std::chrono::nanoseconds(start_unix_ns))));
+  auto span = Tracer()->StartSpan("fight " + target, opentelemetry::common::KeyValueIterableView<Attributes>(attrs),
+                                  options);
+  trace_api::EndSpanOptions end;
+  end.end_steady_time = opentelemetry::common::SteadyTimestamp(steady_end);
+  span->End(end);
+}
+
 void RecordCompleteHeal(const std::string &caster, const std::string &target, const std::string &zone,
                         int chain_position, int caster_mana_percent) {
   const auto now = std::chrono::steady_clock::now();

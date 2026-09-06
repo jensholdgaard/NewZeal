@@ -73,6 +73,13 @@ void SweepCompleteHealChains();
 void RecordFightTotals(const std::string &target, const std::string &zone, double duration_s,
                        const std::vector<std::pair<std::string, double>> &active_seconds_by_source);
 
+// One encounter as a span, from first damage to its end, about the individual spawn: the raw name
+// and spawn id ride on the span and never on a metric. `outcome` is killed / idle / zoned. Times
+// are unix nanoseconds; the span is emitted whole, since both ends are known when the fight closes.
+void RecordFightSpan(const std::string &target, const std::string &spawn_name, unsigned spawn_id,
+                     const std::string &zone, const char *outcome, unsigned long long start_unix_ns,
+                     unsigned long long end_unix_ns, long long damage_dealt, long long damage_taken);
+
 // Healing delivered or received.
 void RecordHeal(const std::string &source, const std::string &direction, const std::string &zone,
                 const std::string &group_leader, long long amount);
