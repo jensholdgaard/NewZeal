@@ -10,6 +10,10 @@
 // During the last second of a song's cast, it swaps the configured instrument in so the
 // song lands with the instrument bonus. After the song lands and before the next song
 // starts casting, it swaps the original weapons back.
+//
+// An item step in a melody ("i22", "iBreath") can have a set of its own, filed under that
+// token: it is swapped in right before the click, since an instant clicky has no cast to
+// wait out, and restored before the next song as usual.
 class Bandoleer {
  public:
   Bandoleer(class ZealService *zeal);
@@ -20,6 +24,8 @@ class Bandoleer {
 
   // Called by Melody right AFTER a new song starts casting to begin monitoring the cast timer.
   void notify_song_start(int gem_index);
+  // Called by Melody right BEFORE clicking an item step: swaps that step's set in now, if any.
+  void notify_item_step(const std::string &key);
 
   // Called by Melody when it ends to ensure weapons are restored.
   void notify_melody_stop();
@@ -49,9 +55,14 @@ class Bandoleer {
   void swap_weapons_back();
 
   void initialize_ini_filename();
-  void save(int gem_number);
-  void clear(int gem_number);
+  void save(const std::string &section, const std::string &label);
+  void clear(const std::string &section, const std::string &label);
   void list();
+  // The ini section for a gem ("Gem3") or an item step ("Item_i22"); "" for a bad token.
+  static std::string section_for(const std::string &token);
+  // Item-step sections are not enumerable from the ini, so their keys are kept in one list.
+  std::vector<std::string> item_keys();
+  void remember_item_key(const std::string &key, bool keep);
 
   // Searches inventory bags for an item matching the id and name. Returns bag slot id (250+) or -1.
   int find_item_in_bags(int item_id, const std::string &item_name);
@@ -63,10 +74,11 @@ class Bandoleer {
   static const char *get_slot_label(int slot_index);
 
   // Returns true if the given gem (0-based) has any bandoleer items configured.
-  bool has_config_for_gem(int gem_index);
+  bool has_config(const std::string &section);
+  bool has_config_for_gem(int gem_index) { return has_config("Gem" + std::to_string(gem_index + 1)); }
 
   State state = State::Idle;
-  int active_gem = -1;                    // 0-based gem index being monitored (-1 if none).
+  std::string active_section;             // The ini section being monitored / swapped ("" if none).
   std::vector<SwapRecord> active_swaps;   // Tracks what was swapped for restoration.
 
   IO_ini ini = IO_ini(".\\bandoleer.ini");  // Filename updated later to per character.

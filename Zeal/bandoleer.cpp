@@ -29,13 +29,53 @@ const char *Bandoleer::get_slot_label(int slot_index) {
   }
 }
 
-// Saves the current Primary, Secondary, and Range items for a gem (1-based gem_number).
-void Bandoleer::save(int gem_number) {
+// "3" -> "Gem3"; "i22" / "iBreath" -> "Item_i22" / "Item_iBreath"; anything else -> "".
+std::string Bandoleer::section_for(const std::string &token) {
+  int gem_number = 0;
+  if (Zeal::String::tryParse(token, &gem_number, true))
+    return (gem_number >= 1 && gem_number <= GAME_NUM_SPELL_GEMS) ? "Gem" + std::to_string(gem_number) : "";
+  if (token.size() >= 2 && (token[0] == 'i' || token[0] == 'I')) return "Item_" + token;
+  return "";
+}
+
+// The ini cannot list its sections, so the item-step keys are kept comma-separated under [Items].
+std::vector<std::string> Bandoleer::item_keys() {
+  initialize_ini_filename();
+  std::vector<std::string> keys;
+  if (!ini.exists("Items", "Keys")) return keys;
+  std::string list = ini.getValue<std::string>("Items", "Keys");
+  size_t start = 0;
+  while (start <= list.size()) {
+    size_t comma = list.find(',', start);
+    std::string key = list.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+    if (!key.empty()) keys.push_back(key);
+    if (comma == std::string::npos) break;
+    start = comma + 1;
+  }
+  return keys;
+}
+
+void Bandoleer::remember_item_key(const std::string &key, bool keep) {
+  std::vector<std::string> keys = item_keys();
+  std::string joined;
+  bool present = false;
+  for (const auto &k : keys) {
+    if (k == key) {
+      present = true;
+      if (!keep) continue;
+    }
+    joined += (joined.empty() ? "" : ",") + k;
+  }
+  if (keep && !present) joined += (joined.empty() ? "" : ",") + key;
+  ini.setValue("Items", "Keys", joined);
+}
+
+// Saves the current Primary, Secondary, and Range items under a section ("Gem3" / "Item_i22").
+void Bandoleer::save(const std::string &section, const std::string &label) {
   Zeal::GameStructures::GAMECHARINFO *char_info = Zeal::Game::get_char_info();
   if (!char_info) return;
 
   initialize_ini_filename();
-  std::string section = "Gem" + std::to_string(gem_number);
 
   for (int slot : kManagedSlots) {
     Zeal::GameStructures::GAMEITEMINFO *item = char_info->InventoryItem[slot];
@@ -50,7 +90,8 @@ void Bandoleer::save(int gem_number) {
     }
   }
 
-  Zeal::Game::print_chat("Bandoleer: Saved instruments for gem %i.", gem_number);
+  if (section.rfind("Item_", 0) == 0) remember_item_key(section.substr(5), true);
+  Zeal::Game::print_chat("Bandoleer: Saved instruments for %s.", label.c_str());
   for (int slot : kManagedSlots) {
     Zeal::GameStructures::GAMEITEMINFO *item = char_info->InventoryItem[slot];
     if (item)
@@ -60,14 +101,14 @@ void Bandoleer::save(int gem_number) {
   }
 }
 
-// Clears the saved items for a gem (1-based gem_number).
-void Bandoleer::clear(int gem_number) {
+// Clears the saved items under a section ("Gem3" / "Item_i22").
+void Bandoleer::clear(const std::string &section, const std::string &label) {
   initialize_ini_filename();
-  std::string section = "Gem" + std::to_string(gem_number);
+  if (section.rfind("Item_", 0) == 0) remember_item_key(section.substr(5), false);
   if (!ini.deleteSection(section))
-    Zeal::Game::print_chat("Bandoleer: Error clearing gem %i.", gem_number);
+    Zeal::Game::print_chat("Bandoleer: Error clearing %s.", label.c_str());
   else
-    Zeal::Game::print_chat("Bandoleer: Cleared gem %i.", gem_number);
+    Zeal::Game::print_chat("Bandoleer: Cleared %s.", label.c_str());
 }
 
 // Lists all gem item assignments.
@@ -88,14 +129,26 @@ void Bandoleer::list() {
         Zeal::Game::print_chat("    %s: %s", get_slot_label(slot), item_name.c_str());
     }
   }
+  for (const std::string &key : item_keys()) {
+    std::string section = "Item_" + key;
+    if (!has_config(section)) continue;
+
+    found_any = true;
+    Zeal::Game::print_chat("  Item step %s:", key.c_str());
+    for (int slot : kManagedSlots) {
+      int item_id = ini.getValue<int>(section, std::string(get_slot_label(slot)) + "_ID");
+      std::string item_name = ini.getValue<std::string>(section, std::string(get_slot_label(slot)) + "_Name");
+      if (item_id > 0)
+        Zeal::Game::print_chat("    %s: %s", get_slot_label(slot), item_name.c_str());
+    }
+  }
   if (!found_any) Zeal::Game::print_chat("  (none)");
   Zeal::Game::print_chat("--- end of bandoleer ---");
 }
 
-// Returns true if the given gem (0-based) has any non-empty bandoleer items configured.
-bool Bandoleer::has_config_for_gem(int gem_index) {
+// Returns true if the section has any non-empty bandoleer items configured.
+bool Bandoleer::has_config(const std::string &section) {
   initialize_ini_filename();
-  std::string section = "Gem" + std::to_string(gem_index + 1);
   for (int slot : kManagedSlots) {
     std::string key_id = std::string(get_slot_label(slot)) + "_ID";
     if (ini.exists(section, key_id) && ini.getValue<int>(section, key_id) > 0) return true;
@@ -183,13 +236,13 @@ bool Bandoleer::swap_item(int bag_slot_id, int equip_slot_index) {
   return success;
 }
 
-// Swaps the configured instruments into the equipment slots for the active gem.
+// Swaps the configured instruments into the equipment slots for the active section.
 void Bandoleer::swap_instruments_in() {
   Zeal::GameStructures::GAMECHARINFO *char_info = Zeal::Game::get_char_info();
-  if (!char_info || active_gem < 0) return;
+  if (!char_info || active_section.empty()) return;
 
   initialize_ini_filename();
-  std::string section = "Gem" + std::to_string(active_gem + 1);
+  const std::string section = active_section;
 
   active_swaps.clear();
 
@@ -249,19 +302,31 @@ void Bandoleer::restore_if_swapped() {
   if (state == State::Swapped) {
     swap_weapons_back();
     state = State::Idle;
-    active_gem = -1;
+    active_section.clear();
   }
 }
 
 // Called by Melody right AFTER a new song starts casting.
 void Bandoleer::notify_song_start(int gem_index) {
-  if (has_config_for_gem(gem_index)) {
-    active_gem = gem_index;
+  std::string section = "Gem" + std::to_string(gem_index + 1);
+  if (has_config(section)) {
+    active_section = section;
     state = State::Monitoring;
   } else {
-    active_gem = -1;
+    active_section.clear();
     state = State::Idle;
   }
+}
+
+// Called by Melody right BEFORE it clicks an item step. An instant clicky has no cast timer to
+// wait out, so the set goes in now and comes back out before the next song, as after any swap.
+void Bandoleer::notify_item_step(const std::string &key) {
+  std::string section = "Item_" + key;
+  if (!has_config(section)) return;
+  active_section = section;
+  swap_instruments_in();
+  state = active_swaps.empty() ? State::Idle : State::Swapped;
+  if (state == State::Idle) active_section.clear();
 }
 
 // Called by Melody when it ends.
@@ -270,12 +335,12 @@ void Bandoleer::notify_melody_stop() {
     swap_weapons_back();
   }
   state = State::Idle;
-  active_gem = -1;
+  active_section.clear();
 }
 
 // Bandoleer tick: monitors the casting timer and swaps instruments in during the last second.
 void Bandoleer::tick() {
-  if (state != State::Monitoring || active_gem < 0) return;
+  if (state != State::Monitoring || active_section.empty()) return;
 
   Zeal::GameStructures::Entity *self = Zeal::Game::get_self();
   auto *display = Zeal::Game::get_display();
@@ -309,7 +374,7 @@ Bandoleer::Bandoleer(ZealService *zeal) {
 
   zeal->commands_hook->Add(
       "/bandoleer", {"/ban"},
-      "Melody instrument swaps. Usage: /bandoleer set/clear <gem#>, /bandoleer list",
+      "Melody instrument swaps. Usage: /bandoleer set/clear <gem# or item step>, /bandoleer list",
       [this](std::vector<std::string> &args) {
         if (!Zeal::Game::is_in_game() || !Zeal::Game::get_char_info()) {
           Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "Must be in game to use bandoleer.");
@@ -322,26 +387,28 @@ Bandoleer::Bandoleer(ZealService *zeal) {
         }
 
         if (args.size() == 3) {
-          int gem_number = 0;
-          if (!Zeal::String::tryParse(args[2], &gem_number) || gem_number < 1 || gem_number > GAME_NUM_SPELL_GEMS) {
-            Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "Invalid gem number. Use 1-%i.", GAME_NUM_SPELL_GEMS);
+          std::string section = section_for(args[2]);
+          if (section.empty()) {
+            Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "Use a gem number 1-%i or a melody item step like i22.",
+                                   GAME_NUM_SPELL_GEMS);
             return true;
           }
+          std::string label = (section.rfind("Item_", 0) == 0) ? "item step " + args[2] : "gem " + args[2];
           if (Zeal::String::compare_insensitive(args[1], "set")) {
-            save(gem_number);
+            save(section, label);
             return true;
           }
           if (Zeal::String::compare_insensitive(args[1], "clear")) {
-            clear(gem_number);
+            clear(section, label);
             return true;
           }
         }
 
-        Zeal::Game::print_chat("Usage: /bandoleer set <gem#> - saves current weapons for that gem");
-        Zeal::Game::print_chat("       /bandoleer clear <gem#> - clears saved weapons for that gem");
-        Zeal::Game::print_chat("       /bandoleer list - shows all gem assignments");
-        Zeal::Game::print_chat("During melody, instruments swap in ~1s before each song lands,");
-        Zeal::Game::print_chat("then your weapons are restored before the next song.");
+        Zeal::Game::print_chat("Usage: /bandoleer set <gem#|i22> - saves current weapons for that gem or item step");
+        Zeal::Game::print_chat("       /bandoleer clear <gem#|i22> - clears saved weapons for it");
+        Zeal::Game::print_chat("       /bandoleer list - shows all assignments");
+        Zeal::Game::print_chat("During melody, instruments swap in ~1s before each song lands (before the");
+        Zeal::Game::print_chat("click, for an item step), then your weapons are restored before the next song.");
         return true;
       });
 }

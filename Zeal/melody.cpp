@@ -5,6 +5,7 @@
 #include "bandoleer.h"
 #include "callbacks.h"
 #include "commands.h"
+#include "equip_item.h"  // click-from-inventory setting: bag steps and name matches need it
 #include "game_functions.h"
 #include "hook_wrapper.h"
 #include "string_util.h"
@@ -45,7 +46,7 @@ constexpr unsigned int USE_ITEM_QUEUE_TIMEOUT =
 
 enum UseItemState : int { Idle = 0, CastRequested, CastStarted };
 
-bool Melody::start(const std::vector<int> &new_songs, bool resume) {
+bool Melody::start(const std::vector<MelodyStep> &new_songs, bool resume) {
   if (!Zeal::Game::is_in_game()) return false;
 
   Zeal::GameStructures::GAMECHARINFO *char_info = Zeal::Game::get_char_info();
@@ -60,9 +61,20 @@ bool Melody::start(const std::vector<int> &new_songs, bool resume) {
     return false;
   }
 
-  // confirm all gem indices in new_songs are valid indices with memorized spells.
-  std::vector<int> valid_songs;  // Valid, non-empty gem indices.
-  for (const int &gem_index : new_songs) {
+  // Confirm every gem step is a memorized spell and every item step is a real item. A missing one
+  // is skipped with a complaint; a rotation of nothing valid is refused.
+  std::vector<MelodyStep> valid_songs;
+  int song_count = 0;
+  for (const MelodyStep &step : new_songs) {
+    if (step.is_item()) {
+      if (!Zeal::Game::get_inventory_item_from_global_slot_id(step.item_slot, false)) {
+        Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "Error: skipping %s, no item there", step.key.c_str());
+        continue;
+      }
+      valid_songs.push_back(step);
+      continue;
+    }
+    const int gem_index = step.gem;
     if (gem_index < 0 || gem_index >= GAME_NUM_SPELL_GEMS) {
       Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "Error: Invalid spell gem %i", gem_index + 1);
       return false;
@@ -70,11 +82,13 @@ bool Melody::start(const std::vector<int> &new_songs, bool resume) {
 
     if (char_info->MemorizedSpell[gem_index] == -1)
       Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "Error: skipping empty spell gem %i", gem_index + 1);
-    else
-      valid_songs.push_back(gem_index);
+    else {
+      valid_songs.push_back(step);
+      song_count++;
+    }
   }
 
-  if (valid_songs.empty() && !new_songs.empty()) {
+  if (song_count == 0 && !new_songs.empty()) {
     Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "Error: no valid songs");
     return false;
   }
@@ -95,9 +109,83 @@ bool Melody::start(const std::vector<int> &new_songs, bool resume) {
   retry_spell_id = kInvalidSpellId;
   deferred_spell_id = kInvalidSpellId;
   use_item_index = -1;
+  use_item_key.clear();
   use_item_ack_state = UseItemState::Idle;
   if (is_active) Zeal::Game::print_chat(USERCOLOR_SPELLS, "You begin playing a melody.");
   return true;
+}
+
+// "3" -> gem 3; "i22" -> /useitem slot 22; "i2.3" -> bag 2, slot 3; "iBreath" -> the first ready
+// clicky whose name starts with "Breath" (case sensitive, no spaces). Slot numbering is /useitem's.
+bool Melody::parse_step(const std::string &token, MelodyStep *out) {
+  *out = MelodyStep();
+  out->key = token;
+  int number = -1;
+  if (Zeal::String::tryParse(token, &number, true)) {
+    out->gem = number - 1;  // base 0
+    return true;
+  }
+  if (token.size() < 2 || (token[0] != 'i' && token[0] != 'I')) {
+    Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "Melody parsing error: Usage example: /melody 1 2 3 4 i22");
+    return false;
+  }
+  const std::string rest = token.substr(1);
+  const bool check_bags = ZealService::get_instance()->equip_item_hook &&
+                          ZealService::get_instance()->equip_item_hook->setting_click_from_inventory.get();
+  const size_t dot = rest.find('.');
+  int slot = -1;
+  if (dot != std::string::npos) {
+    int bag = 0, bagslot = 0;
+    if (Zeal::String::tryParse(rest.substr(0, dot), &bag, true) &&
+        Zeal::String::tryParse(rest.substr(dot + 1), &bagslot, true)) {
+      if (bag < 1 || bag > GAME_NUM_INVENTORY_PACK_SLOTS || bagslot < 1 || bagslot > GAME_NUM_CONTAINER_SLOTS) {
+        Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "Melody: %s needs bag 1-%i and slot 1-%i", token.c_str(),
+                               GAME_NUM_INVENTORY_PACK_SLOTS, GAME_NUM_CONTAINER_SLOTS);
+        return false;
+      }
+      if (!check_bags) {
+        Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "Melody: enable Zeal click from inventory to use %s",
+                               token.c_str());
+        return false;
+      }
+      slot = GAME_CONTAINER_SLOTS_START + (bag - 1) * GAME_NUM_CONTAINER_SLOTS + bagslot - 1;
+    }
+  } else if (Zeal::String::tryParse(rest, &slot, true)) {
+    if (slot < 0 || slot > GAME_PACKS_SLOTS_END || slot == GAME_EQUIPMENT_SLOTS_END) {
+      Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "Melody: item slots are 0 to %i (see /useitem)",
+                             GAME_PACKS_SLOTS_END);
+      return false;
+    }
+    if (slot < GAME_EQUIPMENT_SLOTS_END) slot += GAME_EQUIPMENT_SLOTS_START;  // /useitem's translation.
+  } else {
+    slot = Zeal::Game::find_use_item_by_name(rest, check_bags);
+    if (slot < GAME_EQUIPMENT_SLOTS_START) {
+      Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "Melody: no ready clicky starting with %s", rest.c_str());
+      return false;
+    }
+  }
+  if (slot < 0) {
+    Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "Melody parsing error: Usage example: /melody 1 2 3 4 i22");
+    return false;
+  }
+  out->item_slot = slot;
+  return true;
+}
+
+// An item step is played by the same path as a queued /useitem: if the step after the current one
+// is an item, it becomes the pending click and the rotation moves on to it. Retries and deferred
+// songs come first, exactly as they do for the next gem.
+void Melody::queue_item_step_if_next() {
+  if (use_item_index >= 0 || songs.empty()) return;
+  if (retry_spell_id != kInvalidSpellId || deferred_spell_id != kInvalidSpellId) return;
+  int next = current_index + 1;
+  if (next >= static_cast<int>(songs.size()) || next < 0) next = 0;
+  const MelodyStep &step = songs[next];
+  if (!step.is_item()) return;
+  current_index = next;
+  use_item_index = step.item_slot;
+  use_item_key = step.key;
+  use_item_timeout = GetTickCount64() + USE_ITEM_QUEUE_TIMEOUT;
 }
 
 void Melody::resume() {
@@ -121,6 +209,7 @@ void Melody::end(bool do_print) {
     retry_spell_id = kInvalidSpellId;
     deferred_spell_id = kInvalidSpellId;
     use_item_index = -1;
+    use_item_key.clear();
     use_item_ack_state = UseItemState::Idle;
 
     // Notify bandoleer to restore weapons if instruments were swapped in.
@@ -135,6 +224,7 @@ bool Melody::use_item(int item_index) {
   if (!is_active) return false;
   // Set fields so use_item(item_index) will execute during tick().
   use_item_index = item_index;
+  use_item_key.clear();  // A one-shot /useitem: no bandoleer set of its own.
   use_item_timeout = GetTickCount64() + USE_ITEM_QUEUE_TIMEOUT;
   return true;
 }
@@ -286,13 +376,24 @@ void Melody::tick() {
   if (!Zeal::Game::get_game() || !Zeal::Game::get_game()->IsOkToTransact() || self->StandingState != Stance::Stand)
     return;
 
-  // Execute a pending use_item() call here
+  // An item step in the rotation becomes the pending click, then plays through the same path as
+  // a queued /useitem.
   use_item_ack_state = UseItemState::Idle;
+  queue_item_step_if_next();
+
+  // Execute a pending use_item() call here
   if (use_item_index >= 0) {
     stop_current_cast();  // Terminate bard song (if active) in order to cast.
+    // Bandoleer: weapons back from the previous song's swap, then the set filed for this step (if
+    // any) in before the click, so the clicky's song lands with its instrument.
+    if (ZealService::get_instance()->bandoleer) {
+      ZealService::get_instance()->bandoleer->restore_if_swapped();
+      if (!use_item_key.empty()) ZealService::get_instance()->bandoleer->notify_item_step(use_item_key);
+    }
     Zeal::GameStructures::GAMEITEMINFO *used_item = nullptr;
     bool success = (use_item_timeout >= current_timestamp) && Zeal::Game::use_item(use_item_index, false, &used_item);
     use_item_index = -1;
+    use_item_key.clear();
     if (success) {
       use_item_ack_state = UseItemState::CastRequested;
       if (used_item && used_item->Common.CastTime == 0 && Zeal::Game::get_game()->IsOkToTransact())
@@ -367,20 +468,25 @@ int Melody::get_next_gem_index() {
   if (char_info && retry_spell_id != kInvalidSpellId) {
     int spell_id = retry_spell_id;
     retry_spell_id = kInvalidSpellId;  // Reset so it only retries once.
-    for (auto gem_index : songs)
-      if (char_info->MemorizedSpell[gem_index] == spell_id) return gem_index;
+    for (const auto &step : songs)
+      if (!step.is_item() && char_info->MemorizedSpell[step.gem] == spell_id) return step.gem;
   }
 
   // Then check if there is already a deferred song.
   if (char_info && deferred_spell_id) {
-    for (auto gem_index : songs)
-      if (char_info->MemorizedSpell[gem_index] == deferred_spell_id && is_gem_ready(gem_index)) return gem_index;
+    for (const auto &step : songs)
+      if (!step.is_item() && char_info->MemorizedSpell[step.gem] == deferred_spell_id && is_gem_ready(step.gem))
+        return step.gem;
   }
 
-  // Finally if neither of those, advance to the next song.
-  current_index++;
-  if (current_index >= songs.size() || current_index < 0) current_index = 0;
-  int current_gem = songs[current_index];
+  // Finally if neither of those, advance to the next song. If the next step is an item, stay put:
+  // queue_item_step_if_next() turns it into the pending click on the next tick, once the retry and
+  // deferred songs above are out of the way.
+  int next = current_index + 1;
+  if (next >= static_cast<int>(songs.size()) || next < 0) next = 0;
+  if (songs[next].is_item()) return -1;
+  current_index = next;
+  int current_gem = songs[current_index].gem;
   if (is_gem_ready(current_gem)) return current_gem;
 
   // The song wasn't ready so try to defer. Our defer queue supports only one song.
@@ -429,7 +535,8 @@ Melody::Melody(ZealService *zeal) {
                              callback_type::WorldMessage);
   zeal->hooks->Add("StopCast", 0x4cb510, StopCast, hook_type_detour);  // Hook in to end melody as well.
   zeal->commands_hook->Add(
-      "/melody", {"/mel"}, "Bard only, auto cycles 5 songs of your choice.", [this](std::vector<std::string> &args) {
+      "/melody", {"/mel"}, "Bard only, auto cycles up to 5 songs and item clicks (i22, i2.3, iName).",
+      [this](std::vector<std::string> &args) {
         if (args.size() > 1 && args[1] == "resume") {
           resume();  // Continues an interrupted melody.
           return true;
@@ -442,21 +549,22 @@ Melody::Melody(ZealService *zeal) {
           return true;
         }
 
-        if (args.size() > 6) {
+        std::vector<MelodyStep> new_songs;
+        int song_count = 0;
+        for (size_t i = 1; i < args.size(); i++)  // start at argument 1 because 0 is the command itself
+        {
+          MelodyStep step;
+          if (!parse_step(args[i], &step)) return true;
+          if (!step.is_item()) song_count++;
+          new_songs.push_back(step);
+        }
+        if (song_count > 5) {
           Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "A melody can only consist of up to 5 songs.");
           return true;
         }
-
-        std::vector<int> new_songs;
-        for (int i = 1; i < args.size(); i++)  // start at argument 1 because 0 is the command itself
-        {
-          int current_gem = -1;
-          if (Zeal::String::tryParse(args[i], &current_gem))
-            new_songs.push_back(current_gem - 1);  // base 0
-          else {
-            Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "Melody parsing error: Usage example: /melody 1 2 3 4");
-            return true;
-          }
+        if (new_songs.size() > 10) {
+          Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "A melody can only consist of up to 10 steps.");
+          return true;
         }
         start(new_songs);
         return true;  // return true to stop the game from processing any further on this command, false if you want to
