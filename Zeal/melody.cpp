@@ -405,9 +405,16 @@ void Melody::tick() {
         use_item_ack_state = UseItemState::Idle;      // Instant bard clicky. Can't use request/ack format.
       start_of_cast_timestamp = current_timestamp;    // Used in timeout check.
       casting_visible_timestamp = current_timestamp;  // Insta-clickies may not update.
+      // The set swapped in for this click comes back out before the next song, but not in the
+      // next frame: the click has to reach the server ahead of the equip change that undoes it.
+      if (ZealService::get_instance()->bandoleer && ZealService::get_instance()->bandoleer->is_swapped())
+        restore_not_before = current_timestamp + MELODY_WAIT_USE_ITEM_TIMEOUT;
       return;
     }
   }
+
+  if (current_timestamp < restore_not_before) return;  // An item step's set is still to be restored.
+  restore_not_before = 0;
 
   int current_gem = get_next_gem_index();
   if (current_gem < 0) return;  // Next song wasn't ready (possibly deferred), so skip and try again next tick.

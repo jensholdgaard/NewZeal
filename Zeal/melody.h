@@ -48,6 +48,7 @@ class Melody {
   WORD retry_spell_id = kInvalidSpellId;           // Song failed (fizzled or otherwise, retry).
   WORD deferred_spell_id = kInvalidSpellId;        // Song wasn't ready so deferred to next opportunity.
   int use_item_index = -1;                         // The pending use_item() to try.
+  ULONGLONG restore_not_before = 0;                // After an item click with a set swapped in: the earliest restore.
   int use_item_ack_state = 0;                      // Tracks special server ack case for use items.
   ULONGLONG use_item_timeout = 0;                  // The max timestamp until the pending use_item() gives up.
   ULONGLONG enter_zone_time = 0;                   // Timestamp of the most recent enter zone callback.

@@ -202,8 +202,12 @@ bool Bandoleer::swap_item(int bag_slot_id, int equip_slot_index) {
   Zeal::GameUI::CXWndManager *wnd_mgr = Zeal::Game::get_wnd_manager();
   if (!wnd_mgr) return false;
 
-  Zeal::GameStructures::GAMEITEMINFO *src_item =
-      reinterpret_cast<Zeal::GameStructures::GAMEITEMINFO *>(src_slot->Item);
+  // What is really in that slot, from the character's inventory - not the pointer the bag window
+  // caches, which is one frame stale right after a swap and then names the item that was just
+  // moved out. Checking the pickup against the stale name made the swap-back abort with the
+  // weapon on the cursor whenever it ran a frame after the swap-in (an item step in a melody).
+  Zeal::GameStructures::GAMEITEMINFO *src_item = Zeal::Game::get_inventory_item_from_global_slot_id(bag_slot_id, false);
+  if (!src_item) src_item = reinterpret_cast<Zeal::GameStructures::GAMEITEMINFO *>(src_slot->Item);
   if (!src_item) return false;
 
   WORD src_item_id = src_item->ID;
