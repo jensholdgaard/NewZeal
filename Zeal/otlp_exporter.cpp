@@ -643,23 +643,35 @@ OtlpExporter::~OtlpExporter() {
 // their name - so the caster has to come from the channel line's speaker prefix. Matching on the
 // " CH - " marker rather than the whole line keeps this working across channel formats and whatever
 // numbering convention a guild puts in front.
+//
+// Clerics do not all run the same macro (2026-09-09, the chain traces): "CH - Isra(75%)" glues the
+// mana to the name, "CH - Mejin - 92%" uses a dash, one macro never resolved %t and announced
+// "Target", and a "444 - CH -" line put a number that is no rotation slot in front. The target is
+// therefore the run of letters right after the marker and nothing else - a character name is one
+// word - the mana is any "NN%" or "(NN)" after it, and a slot is only believed up to 20.
 static bool parse_ch_announce(const std::string &line, std::string &caster, std::string &target,
                               int &position, int &mana_percent) {
   const size_t marker = line.find(" CH - ");
   if (marker == std::string::npos) return false;
-  const size_t pos = marker + 6;
+  size_t pos = marker + 6;
+  while (pos < line.size() && line[pos] == ' ') pos++;
 
-  // Target runs to the mana parenthesis, the closing quote, or end of line.
-  size_t stop = line.find(" (", pos);
-  const size_t quote = line.find('\'', pos);
-  if (quote != std::string::npos && (stop == std::string::npos || quote < stop)) stop = quote;
-  if (stop == std::string::npos) stop = line.size();
-  target = Zeal::String::trim_and_reduce_spaces(line.substr(pos, stop - pos));
-  if (target.empty()) return false;
+  // The target: letters only, so "Isra(75%)", "Isra - 92%" and "Isra's" all give Isra.
+  size_t end = pos;
+  while (end < line.size() && isalpha(static_cast<unsigned char>(line[end]))) end++;
+  target = line.substr(pos, end - pos);
+  if (target.size() < 3) return false;
+  // An unresolved %t: the macro said the word "Target". No chain can be named from it.
+  if (Zeal::String::compare_insensitive(target, "Target")) return false;
+  // As the game prints names: first letter up, the rest down, whatever the macro's casing.
+  target[0] = static_cast<char>(toupper(static_cast<unsigned char>(target[0])));
+  for (size_t i = 1; i < target.size(); ++i)
+    target[i] = static_cast<char>(tolower(static_cast<unsigned char>(target[i])));
 
   // The rotation slot is whatever number sits immediately before the marker: "1 - CH - ...".
   // Scanning back from the marker rather than anchoring to the line start keeps it independent of
-  // the channel prefix the client puts in front.
+  // the channel prefix the client puts in front. A rotation has a handful of slots; anything
+  // larger is some other number in the macro.
   position = -1;
   {
     size_t scan = marker;
@@ -672,20 +684,27 @@ static bool parse_ch_announce(const std::string &line, std::string &caster, std:
     while (scan > 0 && isdigit(static_cast<unsigned char>(line[scan - 1]))) scan--;
     if (digits_end > scan) {
       int parsed = 0;
-      if (Zeal::String::tryParse(line.substr(scan, digits_end - scan), &parsed, true)) position = parsed;
+      if (Zeal::String::tryParse(line.substr(scan, digits_end - scan), &parsed, true) && parsed >= 1 &&
+          parsed <= 20)
+        position = parsed;
     }
   }
 
+  // Mana: the first number after the target that is followed by '%' or sits in parentheses.
   mana_percent = -1;
-  const size_t open = line.find(" (", pos);
-  if (open != std::string::npos) {
-    const size_t close = line.find(')', open);
-    if (close != std::string::npos) {
+  for (size_t i = end; i < line.size() && mana_percent < 0; ++i) {
+    if (!isdigit(static_cast<unsigned char>(line[i]))) continue;
+    size_t j = i;
+    while (j < line.size() && isdigit(static_cast<unsigned char>(line[j]))) j++;
+    size_t after = j;
+    while (after < line.size() && line[after] == ' ') after++;
+    const bool percent = after < line.size() && line[after] == '%';
+    const bool parenthesised = i > 0 && line[i - 1] == '(' && after < line.size() && line[after] == ')';
+    if (percent || parenthesised) {
       int parsed = 0;
-      if (Zeal::String::tryParse(Zeal::String::trim_and_reduce_spaces(line.substr(open + 2, close - open - 2)),
-                                 &parsed, true))
-        mana_percent = parsed;  // 0-100; validated where it is recorded
+      if (Zeal::String::tryParse(line.substr(i, j - i), &parsed, true)) mana_percent = parsed;
     }
+    i = j;
   }
 
   // The speaker prefix the client adds to channel lines: "<name> tells ...".
