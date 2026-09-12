@@ -69,6 +69,7 @@
   <ItemGroup>
     <ClInclude Include="alarm.h" />
     <ClInclude Include="assist.h" />
+    <ClInclude Include="assist_target.h" />
     <ClInclude Include="autofire.h" />
     <ClInclude Include="bandolier.h" />
     <ClInclude Include="bandoleer.h" />
@@ -161,6 +162,7 @@
   <ItemGroup>
     <ClCompile Include="alarm.cpp" />
     <ClCompile Include="assist.cpp" />
+    <ClCompile Include="assist_target.cpp" />
     <ClCompile Include="autofire.cpp" />
     <ClCompile Include="bandolier.cpp" />
     <ClCompile Include="bandoleer.cpp" />

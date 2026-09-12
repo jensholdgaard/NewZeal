@@ -282,6 +282,9 @@
     <ClInclude Include="assist.h">
       <Filter>Header Files\other</Filter>
     </ClInclude>
+    <ClInclude Include="assist_target.h">
+      <Filter>Header Files\other</Filter>
+    </ClInclude>
     <ClInclude Include="miniz.h">
       <Filter>Header Files\other</Filter>
     </ClInclude>
@@ -510,6 +513,9 @@
       <Filter>Source Files\other</Filter>
     </ClCompile>
     <ClCompile Include="assist.cpp">
+      <Filter>Source Files\other</Filter>
+    </ClCompile>
+    <ClCompile Include="assist_target.cpp">
       <Filter>Source Files\other</Filter>
     </ClCompile>
     <ClCompile Include="game_functions.cpp">
