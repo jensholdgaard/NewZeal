@@ -106,7 +106,7 @@ jobs:
 
           $env:ZEAL_OTEL_SDK = '1'
           # Stamp the commit into the binary (ZEAL_BUILD_VERSION, see Zeal.vcxproj): /zeal version
-          # prints 1.4.5+<commit>, and the DKP bot's /dpstoken gate and /dpsstatus rely on it.
+          # prints <ZEAL_VERSION>+<commit>, and the DKP bot's /dpstoken gate and /dpsstatus rely on it.
           $short = (git rev-parse --short $env:GITHUB_SHA).Trim()
           & msbuild /m /p:Configuration=Release /p:Platform=x86 /p:LanguageStandard=stdcpp20 `
             /p:ZEAL_OTEL_SDK=1 /p:OTEL_INSTALL="$env:OTEL_INSTALL" /p:VCPKG_INSTALL="$env:VCPKG_INSTALL" `
@@ -149,19 +149,24 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
-          # Refuse to publish a build without the SDK or the stamp - both have happened by hand.
+          # Refuse to publish a build without the SDK, or one not stamped with this commit -
+          # both have happened by hand. The version number is read out of the binary rather
+          # than written here: this gate used to hard-code 1.4.5, so the upstream merge that
+          # bumped ZEAL_VERSION to 1.4.7 (2026-09-12) failed a perfectly good build and read
+          # as "the build is broken" when only this line was stale. What actually matters is
+          # that *some* version is stamped with *this* commit, which is what the pattern says.
           otel=$(strings -n 12 Zeal.asi | grep -c opentelemetry || true)
           short=$(echo "${GITHUB_SHA}" | cut -c1-7)
-          stamp=$(strings -n 8 Zeal.asi | grep -c "1.4.5+${short}" || true)
-          echo "otel strings: $otel, stamp 1.4.5+${short}: $stamp"
-          [ "$otel" -gt 100 ] && [ "$stamp" -ge 1 ]
+          ver=$(strings -n 8 Zeal.asi | grep -oE "[0-9]+\\.[0-9]+\\.[0-9]+\\+${short}" | head -1 | cut -d+ -f1)
+          echo "otel strings: $otel, stamp: ${ver:-<none>}+${short}"
+          [ "$otel" -gt 100 ] && [ -n "$ver" ]
           sha=$(sha256sum Zeal.asi | cut -c1-64)
           echo "$sha  Zeal.asi" > Zeal.asi.sha256
           # The build the DKP bot's /dpstoken gate expects members to be on; it reads this file
           # from the release, so nobody edits a config after a push.
           echo "$short" > build.txt
           notes="$(cat <<EOF
-          Nocturnal Zeal — the guild's Zeal with telemetry. Built from \`main\` @ ${short}; \`/zeal version\` in game says \`1.4.5+${short}\`.
+          Nocturnal Zeal — the guild's Zeal with telemetry. Built from \`main\` @ ${short}; \`/zeal version\` in game says \`${ver}+${short}\`.
 
           **Install:** drop \`Zeal.asi\` into your EverQuest folder, replacing the one there (keep the old one aside; you still need your normal Zeal install).
 
