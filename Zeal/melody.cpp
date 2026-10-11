@@ -220,11 +220,11 @@ void Melody::end(bool do_print) {
   }
 }
 
-bool Melody::use_item(int item_index) {
+bool Melody::use_item(int item_index, const std::string &key) {
   if (!is_active) return false;
   // Set fields so use_item(item_index) will execute during tick().
   use_item_index = item_index;
-  use_item_key.clear();  // A one-shot /useitem: no bandoleer set of its own.
+  use_item_key = key;  // A /useitem shares the item-step sets: "/useitem 22" swaps in i22's.
   use_item_timeout = GetTickCount64() + USE_ITEM_QUEUE_TIMEOUT;
   return true;
 }
@@ -387,13 +387,14 @@ void Melody::tick() {
     // Bandoleer: weapons back from the previous song's swap first, on a frame of their own - two
     // swaps in one frame click bag slots the inventory window has not refreshed, and the
     // displaced weapon ends up on the cursor. Then the set filed for this step (if any) goes in
-    // right before the click, so the clicky's song lands with its instrument.
+    // right before the click, so the clicky's song lands with its instrument - or, for a clicky
+    // song with a cast time, in the cast's last moments, exactly as for a gem.
     if (ZealService::get_instance()->bandoleer) {
       if (ZealService::get_instance()->bandoleer->is_swapped()) {
         ZealService::get_instance()->bandoleer->restore_if_swapped();
         return;  // The click waits one tick; use_item_index stays queued.
       }
-      if (!use_item_key.empty()) ZealService::get_instance()->bandoleer->notify_item_step(use_item_key);
+      ZealService::get_instance()->bandoleer->notify_item_step(use_item_key, use_item_index);
     }
     Zeal::GameStructures::GAMEITEMINFO *used_item = nullptr;
     bool success = (use_item_timeout >= current_timestamp) && Zeal::Game::use_item(use_item_index, false, &used_item);

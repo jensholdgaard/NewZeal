@@ -12,8 +12,16 @@
 // starts casting, it swaps the original weapons back.
 //
 // An item step in a melody ("i22", "iBreath") can have a set of its own, filed under that
-// token: it is swapped in right before the click, since an instant clicky has no cast to
-// wait out, and restored before the next song as usual.
+// token. An instant clicky has no cast to wait out, so its set is swapped in right before the
+// click. A clicky song with a cast time (Composers Chestplate's Warsong of Zek, 3 s) is played
+// like a gem: the server reads the instrument mod when the song lands (Mob::GetInstrumentMod at
+// SpellOnTarget), so the set goes in during the cast's last moments and the weapons stay in
+// hand until then. Either way the weapons are restored before the next song.
+//
+// /useitem shares those sets: "/useitem 22", "/useitem 2 3" and "/useitem Breath" look up the
+// sets filed under "i22", "i2.3" and "iBreath". Inside a melody the click is queued as an item
+// step; outside one the set goes in right before the click and comes back out once the cast is
+// over.
 class Bandoleer {
  public:
   Bandoleer(class ZealService *zeal);
@@ -24,8 +32,13 @@ class Bandoleer {
 
   // Called by Melody right AFTER a new song starts casting to begin monitoring the cast timer.
   void notify_song_start(int gem_index);
-  // Called by Melody right BEFORE clicking an item step: swaps that step's set in now, if any.
-  void notify_item_step(const std::string &key);
+  // Called by Melody right BEFORE clicking an item step: swaps that step's set in now, or for a
+  // clicky with a cast time, monitors the cast to swap it in at the end like a song.
+  void notify_item_step(const std::string &key, int global_slot_id);
+
+  // /useitem outside a melody: swaps in the set filed under the item-step key (if any), clicks
+  // the item, and restores the weapons once the cast is over. Returns the click's result.
+  bool use_item_with_set(const std::string &key, int global_slot_id, bool quiet);
 
   // Called by Melody when it ends to ensure weapons are restored.
   void notify_melody_stop();
@@ -75,6 +88,10 @@ class Bandoleer {
   // Returns a display label for an equipment slot index.
   static const char *get_slot_label(int slot_index);
 
+  // True if an item step's set goes in at the end of the cast rather than before the click: the
+  // item has a cast time and is not itself part of the set (it must stay put while it casts).
+  bool swaps_during_cast(const std::string &section, int global_slot_id);
+
   // Returns true if the given gem (0-based) has any bandoleer items configured.
   bool has_config(const std::string &section);
   bool has_config_for_gem(int gem_index) { return has_config("Gem" + std::to_string(gem_index + 1)); }
@@ -82,6 +99,8 @@ class Bandoleer {
   State state = State::Idle;
   std::string active_section;             // The ini section being monitored / swapped ("" if none).
   std::vector<SwapRecord> active_swaps;   // Tracks what was swapped for restoration.
+  ULONGLONG useitem_restore_after = 0;    // A /useitem set's earliest restore (0 if melody owns the swap);
+                                          // while still monitoring, the deadline for its cast to begin.
 
   IO_ini ini = IO_ini(".\\bandoleer.ini");  // Filename updated later to per character.
 };

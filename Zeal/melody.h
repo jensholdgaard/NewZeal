@@ -23,7 +23,9 @@ class Melody {
   void end(bool do_print = false);
   void handle_stop_cast_callback(BYTE reason, WORD spell_id);
   void handle_deactivate_ui();
-  bool use_item(int item_index);  // Returns true if melody queued /useitem(item_index).
+  // Returns true if melody queued /useitem(item_index). `key` is the item-step token the click
+  // stands for ("i22"), so the bandoleer swaps that step's set in; "" for none.
+  bool use_item(int item_index, const std::string &key = "");
   Melody(class ZealService *pHookWrapper);
   ~Melody();
 
@@ -41,7 +43,7 @@ class Melody {
   bool is_active = false;                          // Set when melody is actively running.
   int current_index = 0;                           // Active step index. -1 if not started yet.
   std::vector<MelodyStep> songs;                   // The rotation: gem steps and item steps.
-  std::string use_item_key;                        // The step token behind the pending use_item(), "" for /useitem.
+  std::string use_item_key;                        // The step token behind the pending use_item(), "" for none.
   int retry_count = 0;                             // Tracks unsuccessful song casts.
   WORD casting_melody_spell_id = kInvalidSpellId;  // Current melody song being cast. Is only a valid id while cast
                                                    // window is visible (actively casting).

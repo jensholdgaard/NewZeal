@@ -333,6 +333,7 @@ void Bandoleer::restore_if_swapped() {
     state = State::Idle;
     active_section.clear();
   }
+  useitem_restore_after = 0;  // A /useitem set still in is the melody's to restore now.
 }
 
 // Called by Melody right AFTER a new song starts casting.
@@ -347,15 +348,89 @@ void Bandoleer::notify_song_start(int gem_index) {
   }
 }
 
+bool Bandoleer::swaps_during_cast(const std::string &section, int global_slot_id) {
+  Zeal::GameStructures::GAMEITEMINFO *item = Zeal::Game::get_inventory_item_from_global_slot_id(global_slot_id, false);
+  if (!item || item->Common.CastTime == 0) return false;
+  for (int slot : kManagedSlots)
+    if (ini.getValue<int>(section, std::string(get_slot_label(slot)) + "_ID") == item->ID) return false;
+  return true;
+}
+
 // Called by Melody right BEFORE it clicks an item step. An instant clicky has no cast timer to
 // wait out, so the set goes in now and comes back out before the next song, as after any swap.
-void Bandoleer::notify_item_step(const std::string &key) {
+// A clicky with a cast time is monitored like a song from notify_song_start: tick() swaps the
+// set in once OP_BeginCast has started the cast bar and its last kSwapThresholdMs are reached.
+void Bandoleer::notify_item_step(const std::string &key, int global_slot_id) {
+  // Whatever the previous step left monitoring is over: this click is the next cast. Left in
+  // place, a step without a set would get the previous step's set swapped in at its end.
+  if (state == State::Monitoring) {
+    state = State::Idle;
+    active_section.clear();
+  }
   std::string section = "Item_" + key;
-  if (!has_config(section)) return;
+  if (key.empty() || !has_config(section)) return;
   active_section = section;
+  if (swaps_during_cast(section, global_slot_id)) {
+    state = State::Monitoring;
+    return;
+  }
   swap_instruments_in();
   state = active_swaps.empty() ? State::Idle : State::Swapped;
   if (state == State::Idle) active_section.clear();
+}
+
+// /useitem outside a melody. The set goes in right before the click, as for an item step, and
+// comes back out from tick() once the cast is over - not sooner than 500 ms after the click, which
+// has to reach the server ahead of the equip change that undoes it (see Melody's item steps).
+bool Bandoleer::use_item_with_set(const std::string &key, int global_slot_id, bool quiet) {
+  constexpr ULONGLONG kRestoreDelayMs = 500;
+  const std::string section = "Item_" + key;
+  // A set from the previous /useitem that is not back yet: swapping again in the same window
+  // clicks bag slots the inventory has not refreshed. Click without a set rather than refuse.
+  // The old UI has no tick to restore from (see the constructor).
+  if (key.empty() || !Zeal::Game::is_new_ui() || state != State::Idle || Zeal::Game::GetSpellCastingTime() != -1 ||
+      !has_config(section))
+    return Zeal::Game::use_item(global_slot_id, quiet);
+
+  // A clicky song with a cast time plays like a gem: click with the weapons in, and tick() swaps
+  // the set in at the end of the cast. The cast has a second to begin (OP_BeginCast) or the
+  // monitor is dropped, so a refused click cannot leave it armed for some later cast.
+  if (swaps_during_cast(section, global_slot_id)) {
+    bool success = Zeal::Game::use_item(global_slot_id, quiet);
+    if (success) {
+      active_section = section;
+      state = State::Monitoring;
+      useitem_restore_after = GetTickCount64() + 1000;
+    }
+    return success;
+  }
+
+  // The clicked item can itself be part of the set (an instrument clicked from a bag): after the
+  // swap it sits in an equipment slot, so follow it there by id.
+  Zeal::GameStructures::GAMEITEMINFO *item = Zeal::Game::get_inventory_item_from_global_slot_id(global_slot_id, false);
+  const int item_id = item ? item->ID : 0;
+
+  active_section = section;
+  swap_instruments_in();
+  if (active_swaps.empty()) {
+    active_section.clear();
+    return Zeal::Game::use_item(global_slot_id, quiet);
+  }
+  state = State::Swapped;
+  useitem_restore_after = GetTickCount64() + kRestoreDelayMs;
+
+  Zeal::GameStructures::GAMECHARINFO *char_info = Zeal::Game::get_char_info();
+  item = Zeal::Game::get_inventory_item_from_global_slot_id(global_slot_id, false);
+  if (char_info && item_id && (!item || item->ID != item_id)) {
+    for (int slot : kManagedSlots) {
+      Zeal::GameStructures::GAMEITEMINFO *equipped = char_info->InventoryItem[slot];
+      if (equipped && equipped->ID == item_id) {
+        global_slot_id = slot + 1;  // Equipment index to global slot id.
+        break;
+      }
+    }
+  }
+  return Zeal::Game::use_item(global_slot_id, quiet);
 }
 
 // Called by Melody when it ends.
@@ -365,13 +440,31 @@ void Bandoleer::notify_melody_stop() {
   }
   state = State::Idle;
   active_section.clear();
+  useitem_restore_after = 0;
 }
 
 // Bandoleer tick: monitors the casting timer and swaps instruments in during the last second.
 void Bandoleer::tick() {
+  // A /useitem set comes back out once its cast is over (an instant clicky: right after the delay).
+  if (state == State::Swapped && useitem_restore_after) {
+    if (GetTickCount64() < useitem_restore_after || Zeal::Game::GetSpellCastingTime() != -1) return;
+    if (!Zeal::Game::get_game() || !Zeal::Game::get_game()->IsOkToTransact()) return;  // Trade, loot: later.
+    useitem_restore_after = 0;
+    restore_if_swapped();
+    return;
+  }
+
   if (state != State::Monitoring || active_section.empty()) return;
 
   Zeal::GameStructures::Entity *self = Zeal::Game::get_self();
+  // A /useitem clicky song whose cast never began (refused, interrupted before OP_BeginCast).
+  if (useitem_restore_after && GetTickCount64() > useitem_restore_after && self && self->ActorInfo &&
+      self->ActorInfo->CastingSpellId == kInvalidSpellId) {
+    state = State::Idle;
+    active_section.clear();
+    useitem_restore_after = 0;
+    return;
+  }
   auto *display = Zeal::Game::get_display();
   if (!self || !self->ActorInfo || !display) return;
 
@@ -391,6 +484,10 @@ void Bandoleer::tick() {
       state = State::Swapped;
     else
       state = State::Idle;  // No swaps were needed or possible.
+    // A /useitem clicky song: the set stays in until the song has landed, the same 500 ms past
+    // the cast bar that Melody waits for a clicky song (no OP_ManaChange ack comes for one).
+    if (useitem_restore_after)
+      useitem_restore_after = (state == State::Swapped) ? GetTickCount64() + kSwapThresholdMs + 500 : 0;
   }
 }
 
@@ -415,14 +512,17 @@ Bandoleer::Bandoleer(ZealService *zeal) {
           return true;
         }
 
-        if (args.size() == 3) {
-          std::string section = section_for(args[2]);
+        if (args.size() >= 3) {
+          std::string token = args[2];
+          // "iBreath of Harmony": an item name with spaces, as /useitem matches it.
+          for (size_t i = 3; i < args.size(); ++i) token += " " + args[i];
+          std::string section = section_for(token);
           if (section.empty()) {
             Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "Use a gem number 1-%i or a melody item step like i22.",
                                    GAME_NUM_SPELL_GEMS);
             return true;
           }
-          std::string label = (section.rfind("Item_", 0) == 0) ? "item step " + args[2] : "gem " + args[2];
+          std::string label = (section.rfind("Item_", 0) == 0) ? "item step " + token : "gem " + token;
           if (Zeal::String::compare_insensitive(args[1], "set")) {
             save(section, label);
             return true;
@@ -438,6 +538,8 @@ Bandoleer::Bandoleer(ZealService *zeal) {
         Zeal::Game::print_chat("       /bandoleer list - shows all assignments");
         Zeal::Game::print_chat("During melody, instruments swap in ~1s before each song lands (before the");
         Zeal::Game::print_chat("click, for an item step), then your weapons are restored before the next song.");
+        Zeal::Game::print_chat("/useitem uses the same item-step sets: /useitem 22 swaps in i22's set, clicks,");
+        Zeal::Game::print_chat("and restores your weapons once the cast is over (i2.3 for /useitem 2 3).");
         return true;
       });
 }

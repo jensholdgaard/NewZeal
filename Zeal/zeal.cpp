@@ -284,6 +284,7 @@ static bool handle_useitem(const std::vector<std::string> &args, bool check_bags
   if (size < 2) return false;
 
   int global_slot_id = -1;
+  std::string set_key;  // The bandoleer item-step key this click stands for: "i22", "i2.3", "iBreath".
   if (size == 2) {
     if (Zeal::String::tryParse(args[1], &global_slot_id, true)) {
       if (global_slot_id < 0 || global_slot_id > GAME_PACKS_SLOTS_END || global_slot_id == GAME_EQUIPMENT_SLOTS_END) {
@@ -291,6 +292,7 @@ static bool handle_useitem(const std::vector<std::string> &args, bool check_bags
                                GAME_EQUIPMENT_SLOTS_END);
         return true;
       }
+      set_key = "i" + std::to_string(global_slot_id);
       if (global_slot_id < GAME_EQUIPMENT_SLOTS_END)
         global_slot_id += GAME_EQUIPMENT_SLOTS_START;  // Translate 0 to 20 to global slot ID's 1 to 21.
     }
@@ -310,6 +312,7 @@ static bool handle_useitem(const std::vector<std::string> &args, bool check_bags
         return true;
       }
       global_slot_id = GAME_CONTAINER_SLOTS_START + (bag_index - 1) * GAME_NUM_CONTAINER_SLOTS + bagslot_index - 1;
+      set_key = "i" + std::to_string(bag_index) + "." + std::to_string(bagslot_index);
     }
   }
 
@@ -317,6 +320,7 @@ static bool handle_useitem(const std::vector<std::string> &args, bool check_bags
     std::string name = args[1];
     for (auto i = 2; i < size; ++i) name += " " + args[i];  // Re-create full name string with spaces.
     global_slot_id = Zeal::Game::find_use_item_by_name(name, check_bags);
+    set_key = "i" + name;
     if (global_slot_id < GAME_EQUIPMENT_SLOTS_START) {
       if (!quiet) Zeal::Game::print_chat("Could not find a ready to click item starting with %s", name.c_str());
       return true;
@@ -324,9 +328,12 @@ static bool handle_useitem(const std::vector<std::string> &args, bool check_bags
   }
 
   if (char_info->Class == Zeal::GameEnums::ClassTypes::Bard &&
-      ZealService::get_instance()->melody->use_item(global_slot_id))
+      ZealService::get_instance()->melody->use_item(global_slot_id, set_key))
     return true;
-  Zeal::Game::use_item(global_slot_id, quiet);
+  if (ZealService::get_instance()->bandoleer)
+    ZealService::get_instance()->bandoleer->use_item_with_set(set_key, global_slot_id, quiet);
+  else
+    Zeal::Game::use_item(global_slot_id, quiet);
   return true;
 }
 
