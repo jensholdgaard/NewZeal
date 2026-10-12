@@ -22,6 +22,11 @@
 // sets filed under "i22", "i2.3" and "iBreath". Inside a melody the click is queued as an item
 // step; outside one the set goes in right before the click and comes back out once the cast is
 // over.
+//
+// A melody step cannot hold a space, so an item name is written with underscores in its place
+// ("iComposers_Chestplate") and every key is filed in that form: "/bandoleer set iComposers
+// Chestplate", "/melody ... iComposers_Chestplate" and "/useitem Composers Chestplate" all name
+// the same set. No item name has an underscore of its own.
 class Bandoleer {
  public:
   Bandoleer(class ZealService *zeal);
@@ -39,6 +44,10 @@ class Bandoleer {
   // /useitem outside a melody: swaps in the set filed under the item-step key (if any), clicks
   // the item, and restores the weapons once the cast is over. Returns the click's result.
   bool use_item_with_set(const std::string &key, int global_slot_id, bool quiet);
+
+  // The item-step key as filed: spaces become underscores ("iComposers Chestplate" ->
+  // "iComposers_Chestplate"), so a key typed with spaces finds the set a melody step names.
+  static std::string item_key(const std::string &token);
 
   // Called by Melody when it ends to ensure weapons are restored.
   void notify_melody_stop();

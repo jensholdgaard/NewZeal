@@ -116,7 +116,10 @@ bool Melody::start(const std::vector<MelodyStep> &new_songs, bool resume) {
 }
 
 // "3" -> gem 3; "i22" -> /useitem slot 22; "i2.3" -> bag 2, slot 3; "iBreath" -> the first ready
-// clicky whose name starts with "Breath" (case sensitive, no spaces). Slot numbering is /useitem's.
+// clicky whose name starts with "Breath" (case sensitive). A step cannot hold a space, so an
+// underscore stands for one: "iComposers_Chestplate" clicks Composers Chestplate wherever it is,
+// where "iComposers" would take whichever Composers clicky comes first (worn before bagged).
+// Slot numbering is /useitem's.
 bool Melody::parse_step(const std::string &token, MelodyStep *out) {
   *out = MelodyStep();
   out->key = token;
@@ -158,9 +161,12 @@ bool Melody::parse_step(const std::string &token, MelodyStep *out) {
     }
     if (slot < GAME_EQUIPMENT_SLOTS_END) slot += GAME_EQUIPMENT_SLOTS_START;  // /useitem's translation.
   } else {
-    slot = Zeal::Game::find_use_item_by_name(rest, check_bags);
+    std::string name = rest;
+    for (char &c : name)
+      if (c == '_') c = ' ';
+    slot = Zeal::Game::find_use_item_by_name(name, check_bags);
     if (slot < GAME_EQUIPMENT_SLOTS_START) {
-      Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "Melody: no ready clicky starting with %s", rest.c_str());
+      Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "Melody: no ready clicky starting with %s", name.c_str());
       return false;
     }
   }

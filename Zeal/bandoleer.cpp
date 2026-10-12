@@ -29,12 +29,20 @@ const char *Bandoleer::get_slot_label(int slot_index) {
   }
 }
 
-// "3" -> "Gem3"; "i22" / "iBreath" -> "Item_i22" / "Item_iBreath"; anything else -> "".
+std::string Bandoleer::item_key(const std::string &token) {
+  std::string key = token;
+  for (char &c : key)
+    if (c == ' ') c = '_';
+  return key;
+}
+
+// "3" -> "Gem3"; "i22" / "iBreath" -> "Item_i22" / "Item_iBreath"; "iComposers Chestplate" ->
+// "Item_iComposers_Chestplate"; anything else -> "".
 std::string Bandoleer::section_for(const std::string &token) {
   int gem_number = 0;
   if (Zeal::String::tryParse(token, &gem_number, true))
     return (gem_number >= 1 && gem_number <= GAME_NUM_SPELL_GEMS) ? "Gem" + std::to_string(gem_number) : "";
-  if (token.size() >= 2 && (token[0] == 'i' || token[0] == 'I')) return "Item_" + token;
+  if (token.size() >= 2 && (token[0] == 'i' || token[0] == 'I')) return "Item_" + item_key(token);
   return "";
 }
 
@@ -367,7 +375,7 @@ void Bandoleer::notify_item_step(const std::string &key, int global_slot_id) {
     state = State::Idle;
     active_section.clear();
   }
-  std::string section = "Item_" + key;
+  std::string section = "Item_" + item_key(key);
   if (key.empty() || !has_config(section)) return;
   active_section = section;
   if (swaps_during_cast(section, global_slot_id)) {
@@ -384,7 +392,7 @@ void Bandoleer::notify_item_step(const std::string &key, int global_slot_id) {
 // has to reach the server ahead of the equip change that undoes it (see Melody's item steps).
 bool Bandoleer::use_item_with_set(const std::string &key, int global_slot_id, bool quiet) {
   constexpr ULONGLONG kRestoreDelayMs = 500;
-  const std::string section = "Item_" + key;
+  const std::string section = "Item_" + item_key(key);
   // A set from the previous /useitem that is not back yet: swapping again in the same window
   // clicks bag slots the inventory has not refreshed. Click without a set rather than refuse.
   // The old UI has no tick to restore from (see the constructor).
@@ -514,7 +522,7 @@ Bandoleer::Bandoleer(ZealService *zeal) {
 
         if (args.size() >= 3) {
           std::string token = args[2];
-          // "iBreath of Harmony": an item name with spaces, as /useitem matches it.
+          // "iComposers Chestplate": an item name with spaces, filed as "iComposers_Chestplate".
           for (size_t i = 3; i < args.size(); ++i) token += " " + args[i];
           std::string section = section_for(token);
           if (section.empty()) {
@@ -540,6 +548,8 @@ Bandoleer::Bandoleer(ZealService *zeal) {
         Zeal::Game::print_chat("click, for an item step), then your weapons are restored before the next song.");
         Zeal::Game::print_chat("/useitem uses the same item-step sets: /useitem 22 swaps in i22's set, clicks,");
         Zeal::Game::print_chat("and restores your weapons once the cast is over (i2.3 for /useitem 2 3).");
+        Zeal::Game::print_chat("Item names take _ for a space: /bandoleer set iComposers_Chestplate is the set");
+        Zeal::Game::print_chat("for /melody ... iComposers_Chestplate and /useitem Composers Chestplate.");
         return true;
       });
 }

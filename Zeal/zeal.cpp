@@ -319,8 +319,11 @@ static bool handle_useitem(const std::vector<std::string> &args, bool check_bags
   if (global_slot_id < GAME_EQUIPMENT_SLOTS_START) {
     std::string name = args[1];
     for (auto i = 2; i < size; ++i) name += " " + args[i];  // Re-create full name string with spaces.
+    // "Composers_Chestplate" as a melody step writes it; no item name has an underscore of its own.
+    for (char &c : name)
+      if (c == '_') c = ' ';
     global_slot_id = Zeal::Game::find_use_item_by_name(name, check_bags);
-    set_key = "i" + name;
+    set_key = Bandoleer::item_key("i" + name);
     if (global_slot_id < GAME_EQUIPMENT_SLOTS_START) {
       if (!quiet) Zeal::Game::print_chat("Could not find a ready to click item starting with %s", name.c_str());
       return true;
