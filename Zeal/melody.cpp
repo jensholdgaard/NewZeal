@@ -440,7 +440,8 @@ void Melody::tick() {
       // OP_BeginCast it reads as "done" (Composers Chestplate: the next song went out in the same
       // second as the glow and was refused ~20 times in 2 s, ending the melody - eqlog 2026-10-13
       // 20:43:50, 20:46:43). So the click's own spell sets a floor: its cast time (the item's, or
-      // the spell's when the item says 0) plus its recovery. The retry backoff stays the fallback.
+      // the spell's when the item says 0), its recovery, and for a cast a margin. The retry backoff
+      // stays the fallback.
       if (used_item) {
         const int spell_id = used_item->Common.SpellIdEx;
         auto *spell_mgr = Zeal::Game::get_spell_mgr();
@@ -448,7 +449,10 @@ void Melody::tick() {
           const auto *spell = spell_mgr->Spells[spell_id];
           const ULONGLONG cast = std::max<ULONGLONG>(used_item->Common.CastTime > 0 ? used_item->Common.CastTime : 0,
                                                      spell->CastTime);
-          const ULONGLONG busy = cast + spell->FizzleTime;
+          // A song with a cast time also gets the margin the ack path waits after the cast bar
+          // (MELODY_WAIT_USE_ITEM_TIMEOUT, case (3) above): without it the next song left right
+          // as the Chestplate's landed, and the server's stop of it ended the melody (22:33:34).
+          const ULONGLONG busy = cast + spell->FizzleTime + (cast > 0 ? MELODY_WAIT_USE_ITEM_TIMEOUT : 0);
           if (busy > 0) retry_not_before = std::max<ULONGLONG>(retry_not_before, current_timestamp + busy);
         }
       }
