@@ -382,6 +382,12 @@ void Melody::tick() {
   if (!Zeal::Game::get_game() || !Zeal::Game::get_game()->IsOkToTransact() || self->StandingState != Stance::Stand)
     return;
 
+  // A set swapped in for the last click stays in until that click has reached the server. This
+  // holds the next click too, not just the next song: two item steps in a row (iChestplate iBreath)
+  // used to restore the set one frame after the first click, so its song landed without it.
+  if (current_timestamp < restore_not_before) return;
+  restore_not_before = 0;
+
   // An item step in the rotation becomes the pending click, then plays through the same path as
   // a queued /useitem.
   use_item_ack_state = UseItemState::Idle;
@@ -419,9 +425,6 @@ void Melody::tick() {
       return;
     }
   }
-
-  if (current_timestamp < restore_not_before) return;  // An item step's set is still to be restored.
-  restore_not_before = 0;
 
   int current_gem = get_next_gem_index();
   if (current_gem < 0) return;  // Next song wasn't ready (possibly deferred), so skip and try again next tick.
