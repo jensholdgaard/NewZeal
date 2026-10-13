@@ -449,7 +449,7 @@ void Melody::tick() {
           const ULONGLONG cast = std::max<ULONGLONG>(used_item->Common.CastTime > 0 ? used_item->Common.CastTime : 0,
                                                      spell->CastTime);
           const ULONGLONG busy = cast + spell->FizzleTime;
-          if (busy > 0) retry_not_before = std::max(retry_not_before, current_timestamp + busy);
+          if (busy > 0) retry_not_before = std::max<ULONGLONG>(retry_not_before, current_timestamp + busy);
         }
       }
       start_of_cast_timestamp = current_timestamp;    // Used in timeout check.
