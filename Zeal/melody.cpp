@@ -433,17 +433,22 @@ void Melody::tick() {
     use_item_key.clear();
     if (success) {
       use_item_ack_state = UseItemState::CastRequested;
-      if (used_item && used_item->Common.CastTime == 0 && Zeal::Game::get_game()->IsOkToTransact()) {
+      if (used_item && used_item->Common.CastTime == 0 && Zeal::Game::get_game()->IsOkToTransact())
         use_item_ack_state = UseItemState::Idle;  // Instant bard clicky. Can't use request/ack format.
-        // An instant click can still keep the server busy: its spell's own cast and recovery time
-        // count there, with nothing on the client to wait on. Composers Chestplate is the case: the
-        // next song went out at once and was refused ~20 times in 2 s, ending the melody. Hold the
-        // next step for that long; the retry backoff remains the fallback for anything left over.
+      // The handshake cannot be trusted to hold the next song back: the stop of the song before
+      // the click makes the server send an OP_ManaChange, and when that beats the click's
+      // OP_BeginCast it reads as "done" (Composers Chestplate: the next song went out in the same
+      // second as the glow and was refused ~20 times in 2 s, ending the melody - eqlog 2026-10-13
+      // 20:43:50, 20:46:43). So the click's own spell sets a floor: its cast time (the item's, or
+      // the spell's when the item says 0) plus its recovery. The retry backoff stays the fallback.
+      if (used_item) {
         const int spell_id = used_item->Common.SpellIdEx;
         auto *spell_mgr = Zeal::Game::get_spell_mgr();
         if (spell_mgr && spell_id > 0 && spell_id < GAME_NUM_SPELLS && spell_mgr->Spells[spell_id]) {
           const auto *spell = spell_mgr->Spells[spell_id];
-          const ULONGLONG busy = static_cast<ULONGLONG>(spell->CastTime) + spell->FizzleTime;
+          const ULONGLONG cast = std::max<ULONGLONG>(used_item->Common.CastTime > 0 ? used_item->Common.CastTime : 0,
+                                                     spell->CastTime);
+          const ULONGLONG busy = cast + spell->FizzleTime;
           if (busy > 0) retry_not_before = std::max(retry_not_before, current_timestamp + busy);
         }
       }
