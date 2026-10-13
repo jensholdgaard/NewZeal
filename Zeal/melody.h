@@ -40,6 +40,8 @@ class Melody {
   static bool parse_step(const std::string &token, MelodyStep *out);
   // If the step after the current one is an item, queues it as the pending use_item() and advances.
   void queue_item_step_if_next();
+  // After a failed cast, holds the next attempt back longer the more attempts have failed in a row.
+  void back_off_after_failure();
   bool is_active = false;                          // Set when melody is actively running.
   int current_index = 0;                           // Active step index. -1 if not started yet.
   std::vector<MelodyStep> songs;                   // The rotation: gem steps and item steps.
@@ -51,6 +53,7 @@ class Melody {
   WORD deferred_spell_id = kInvalidSpellId;        // Song wasn't ready so deferred to next opportunity.
   int use_item_index = -1;                         // The pending use_item() to try.
   ULONGLONG restore_not_before = 0;                // After an item click with a set swapped in: the earliest restore.
+  ULONGLONG retry_not_before = 0;                  // After repeated failures: the earliest next cast or click.
   int use_item_ack_state = 0;                      // Tracks special server ack case for use items.
   ULONGLONG use_item_timeout = 0;                  // The max timestamp until the pending use_item() gives up.
   ULONGLONG enter_zone_time = 0;                   // Timestamp of the most recent enter zone callback.

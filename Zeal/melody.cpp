@@ -41,6 +41,8 @@ constexpr int RETRY_COUNT_END_LIMIT = 15;            // Will terminate if 15 ret
 constexpr unsigned int MELODY_ZONE_IN_DELAY = 2000;  // Minimum wait after zoning before attempting to continue melody.
 constexpr unsigned int MELODY_WAIT_TIMEOUT = 1500;   // Maximum wait after the casting timer expires before retrying.
 constexpr unsigned int MELODY_WAIT_USE_ITEM_TIMEOUT = 500;  // Wait time after using a clicky.
+constexpr unsigned int RETRY_BACKOFF_STEP = 250;   // Added wait per failure in a row after the first.
+constexpr unsigned int RETRY_BACKOFF_MAX = 1000;   // Longest wait between attempts.
 constexpr unsigned int USE_ITEM_QUEUE_TIMEOUT =
     3650;  // Max duration a useitem will stay queued for before giving up (mostly to prevent ultra-stale clicks).
 
@@ -105,6 +107,7 @@ bool Melody::start(const std::vector<MelodyStep> &new_songs, bool resume) {
   songs = valid_songs;
   is_active = !songs.empty();
   retry_count = 0;
+  retry_not_before = 0;
   casting_melody_spell_id = kInvalidSpellId;
   retry_spell_id = kInvalidSpellId;
   deferred_spell_id = kInvalidSpellId;
@@ -211,6 +214,7 @@ void Melody::end(bool do_print) {
     }
     is_active = false;
     retry_count = 0;
+    retry_not_before = 0;
     casting_melody_spell_id = kInvalidSpellId;
     retry_spell_id = kInvalidSpellId;
     deferred_spell_id = kInvalidSpellId;
@@ -250,6 +254,20 @@ void Melody::handle_stop_cast_callback(BYTE reason, WORD spell_id) {
   if (casting_melody_spell_id == spell_id && (++retry_count % RETRY_COUNT_REWIND_LIMIT))
     retry_spell_id = casting_melody_spell_id;
   casting_melody_spell_id = kInvalidSpellId;
+  back_off_after_failure();
+}
+
+// The first retry goes out at once, so a lone missed note costs nothing. A failure that repeats
+// is usually the server still busy (e.g. finishing a clicky song with a cast time, which sends no
+// ack and is only waited out by MELODY_WAIT_USE_ITEM_TIMEOUT): retrying every frame then burns the
+// whole retry budget in a fraction of a second and spams chat, so each further attempt waits
+// RETRY_BACKOFF_STEP longer, up to RETRY_BACKOFF_MAX. A cast that holds for a second resets
+// retry_count and with it the backoff.
+void Melody::back_off_after_failure() {
+  if (retry_count <= 1) return;
+  const ULONGLONG wait = std::min<ULONGLONG>(static_cast<ULONGLONG>(retry_count - 1) * RETRY_BACKOFF_STEP,
+                                             RETRY_BACKOFF_MAX);
+  retry_not_before = GetTickCount64() + wait;
 }
 
 void __fastcall StopCast(int t, int u, BYTE reason, WORD spell_id) {
@@ -387,6 +405,7 @@ void Melody::tick() {
   // used to restore the set one frame after the first click, so its song landed without it.
   if (current_timestamp < restore_not_before) return;
   restore_not_before = 0;
+  if (current_timestamp < retry_not_before) return;  // Backing off after repeated failures.
 
   // An item step in the rotation becomes the pending click, then plays through the same path as
   // a queued /useitem.
@@ -440,6 +459,7 @@ void Melody::tick() {
       !Zeal::Game::get_target()) {
     Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "You must first select a target for spell %i", current_gem + 1);
     retry_count++;  // Re-use the retry logic to limit runaway spam if entire song list is target-based.
+    back_off_after_failure();
     return;
   }
 
@@ -460,6 +480,7 @@ void Melody::tick() {
       ZealService::get_instance()->bandoleer->notify_song_start(current_gem);
   } else {
     retry_count++;  // Re-use the retry logic to limit runaway spam if entire song list is invalid.
+    back_off_after_failure();
   }
 
   start_of_cast_timestamp = current_timestamp;
