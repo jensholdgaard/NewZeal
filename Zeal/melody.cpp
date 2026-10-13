@@ -433,8 +433,20 @@ void Melody::tick() {
     use_item_key.clear();
     if (success) {
       use_item_ack_state = UseItemState::CastRequested;
-      if (used_item && used_item->Common.CastTime == 0 && Zeal::Game::get_game()->IsOkToTransact())
-        use_item_ack_state = UseItemState::Idle;      // Instant bard clicky. Can't use request/ack format.
+      if (used_item && used_item->Common.CastTime == 0 && Zeal::Game::get_game()->IsOkToTransact()) {
+        use_item_ack_state = UseItemState::Idle;  // Instant bard clicky. Can't use request/ack format.
+        // An instant click can still keep the server busy: its spell's own cast and recovery time
+        // count there, with nothing on the client to wait on. Composers Chestplate is the case: the
+        // next song went out at once and was refused ~20 times in 2 s, ending the melody. Hold the
+        // next step for that long; the retry backoff remains the fallback for anything left over.
+        const int spell_id = used_item->Common.SpellIdEx;
+        auto *spell_mgr = Zeal::Game::get_spell_mgr();
+        if (spell_mgr && spell_id > 0 && spell_id < GAME_NUM_SPELLS && spell_mgr->Spells[spell_id]) {
+          const auto *spell = spell_mgr->Spells[spell_id];
+          const ULONGLONG busy = static_cast<ULONGLONG>(spell->CastTime) + spell->FizzleTime;
+          if (busy > 0) retry_not_before = std::max(retry_not_before, current_timestamp + busy);
+        }
+      }
       start_of_cast_timestamp = current_timestamp;    // Used in timeout check.
       casting_visible_timestamp = current_timestamp;  // Insta-clickies may not update.
       // The set swapped in for this click comes back out before the next song, but not in the
