@@ -270,6 +270,21 @@ void Melody::back_off_after_failure() {
   retry_not_before = GetTickCount64() + wait;
 }
 
+// A song is a spell cast with one of the bard skills: singing or an instrument.
+static bool is_bard_song(const Zeal::GameStructures::SPELL &spell) {
+  using namespace Zeal::GameEnums;
+  switch (spell.Skill) {
+    case SkillSinging:
+    case SkillBrassInstruments:
+    case SkillStringedInstruments:
+    case SkillWindInstruments:
+    case SkillPercussionInstruments:
+      return true;
+    default:
+      return false;
+  }
+}
+
 void __fastcall StopCast(int t, int u, BYTE reason, WORD spell_id) {
   ZealService::get_instance()->melody->handle_stop_cast_callback(reason, spell_id);
   ZealService::get_instance()->hooks->hook_map["StopCast"]->original(StopCast)(t, u, reason, spell_id);
@@ -444,14 +459,18 @@ void Melody::tick() {
       // the cast bar (MELODY_WAIT_USE_ITEM_TIMEOUT, case (3) above) - without that margin the next
       // song left right as the Chestplate's landed and the melody ended (22:33:34). Instant clicks
       // (Breath of Harmony) get no hold: their spell's cast time does not apply to the click, and
-      // holding for it put ~3 s gaps in the rotation (22:35:19-22:35:33). The retry backoff stays
-      // the fallback.
-      if (used_item && used_item->Common.CastTime > 0) {
-        ULONGLONG busy = static_cast<ULONGLONG>(used_item->Common.CastTime) + MELODY_WAIT_USE_ITEM_TIMEOUT;
-        const int spell_id = used_item->Common.SpellIdEx;
-        auto *spell_mgr = Zeal::Game::get_spell_mgr();
-        if (spell_mgr && spell_id > 0 && spell_id < GAME_NUM_SPELLS && spell_mgr->Spells[spell_id])
-          busy += spell_mgr->Spells[spell_id]->FizzleTime;
+      // holding for it put ~3 s gaps in the rotation (22:35:19-22:35:33). Clicks whose spell is not
+      // a bard song (the Girdle's damage shield) get none either: they show a cast bar and end with
+      // their own OP_ManaChange (case (2)), which already holds the next song, and the extra
+      // recovery + margin left a long pause after the last step of the rotation (23:06:21-26).
+      // The retry backoff stays the fallback.
+      const int spell_id = used_item ? used_item->Common.SpellIdEx : 0;
+      auto *spell_mgr = Zeal::Game::get_spell_mgr();
+      const Zeal::GameStructures::SPELL *spell =
+          (spell_mgr && spell_id > 0 && spell_id < GAME_NUM_SPELLS) ? spell_mgr->Spells[spell_id] : nullptr;
+      if (used_item && used_item->Common.CastTime > 0 && spell && is_bard_song(*spell)) {
+        const ULONGLONG busy = static_cast<ULONGLONG>(used_item->Common.CastTime) + spell->FizzleTime +
+                               MELODY_WAIT_USE_ITEM_TIMEOUT;
         retry_not_before = std::max<ULONGLONG>(retry_not_before, current_timestamp + busy);
       }
       start_of_cast_timestamp = current_timestamp;    // Used in timeout check.
