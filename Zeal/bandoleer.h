@@ -91,7 +91,7 @@ class Bandoleer {
   // Searches inventory bags for an item matching the id and name. Returns bag slot id (250+) or -1.
   int find_item_in_bags(int item_id, const std::string &item_name);
 
-  // Swaps an item from a bag slot into an equipment slot using the InvSlot click mechanism.
+  // Swaps an item from an inventory slot with an equipment slot (game-side, no InvSlot windows).
   bool swap_item(int bag_slot_id, int equip_slot_index);
 
   // Returns a display label for an equipment slot index.

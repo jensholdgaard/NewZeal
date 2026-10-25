@@ -187,69 +187,26 @@ int Bandoleer::find_item_in_bags(int item_id, const std::string &item_name) {
   return -1;
 }
 
-// Swaps an item from a bag slot into an equipment slot using the InvSlot click mechanism.
-// equip_slot_index is 0-based (e.g. 12=Primary). The slot ID for FindInvSlot is index+1.
+// Swaps an item from an inventory slot (bag 250+ or top-level 22-29) with an equipment slot.
+// equip_slot_index is 0-based (e.g. 12=Primary); its global slot id is index+1.
+//
+// Until 2026-10 this clicked the InvSlot windows (FindInvSlot + HandleLButtonUp, pickup / place /
+// put back). That broke with a bag open: the open bag's window holds its own InvSlots for the same
+// slot ids, and their item pointers lag a frame behind a swap, so the clicks picked the wrong copy
+// or saw the wrong item and the swap was refused or auto-inventoried. The game-side swap that
+// upstream's /band uses moves through the cursor with MoveItem on the character's inventory and
+// never touches a window, so open bags no longer matter. It also checks what the windows never did
+// (the item fits the slot, stunned, a busy cursor) and lets a bard swap while singing.
 bool Bandoleer::swap_item(int bag_slot_id, int equip_slot_index) {
   Zeal::GameStructures::GAMECHARINFO *char_info = Zeal::Game::get_char_info();
   if (!char_info) return false;
 
-  if (char_info->CursorItem || char_info->CursorCopper || char_info->CursorGold || char_info->CursorPlatinum ||
-      char_info->CursorSilver)
-    return false;
+  const char *error = Zeal::Game::swap_inventory_slot_items_through_cursor(bag_slot_id, equip_slot_index + 1);
+  if (error) Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "Bandoleer: %s", error);
 
-  Zeal::GameUI::CInvSlotMgr *inv_slot_mgr = Zeal::Game::Windows->InvSlotMgr;
-  if (!inv_slot_mgr) return false;
-
-  Zeal::GameUI::InvSlot *src_slot = inv_slot_mgr->FindInvSlot(bag_slot_id);
-  if (!src_slot || !src_slot->invSlotWnd) return false;
-
-  int equip_slot_id = equip_slot_index + 1;
-  Zeal::GameUI::InvSlot *dst_slot = inv_slot_mgr->FindInvSlot(equip_slot_id);
-  if (!dst_slot || !dst_slot->invSlotWnd || dst_slot->invSlotWnd->SlotID != equip_slot_id) return false;
-
-  Zeal::GameUI::CXWndManager *wnd_mgr = Zeal::Game::get_wnd_manager();
-  if (!wnd_mgr) return false;
-
-  // What is really in that slot, from the character's inventory - not the pointer the bag window
-  // caches, which is one frame stale right after a swap and then names the item that was just
-  // moved out. Checking the pickup against the stale name made the swap-back abort with the
-  // weapon on the cursor whenever it ran a frame after the swap-in (an item step in a melody).
-  Zeal::GameStructures::GAMEITEMINFO *src_item = Zeal::Game::get_inventory_item_from_global_slot_id(bag_slot_id, false);
-  if (!src_item) src_item = reinterpret_cast<Zeal::GameStructures::GAMEITEMINFO *>(src_slot->Item);
-  if (!src_item) return false;
-
-  WORD src_item_id = src_item->ID;
-
-  // Save and override keyboard modifiers (SHIFT forces full stack pickup).
-  BYTE shift = wnd_mgr->ShiftKeyState;
-  BYTE ctrl = wnd_mgr->ControlKeyState;
-  BYTE alt = wnd_mgr->AltKeyState;
-  wnd_mgr->ShiftKeyState = 1;
-  wnd_mgr->ControlKeyState = 0;
-  wnd_mgr->AltKeyState = 0;
-
-  bool success = false;
-
-  // (1) Pick up item from bag to cursor.
-  src_slot->HandleLButtonUp();
-  if (char_info->CursorItem && char_info->CursorItem->ID == src_item_id) {
-    Zeal::GameStructures::GAMEITEMINFO *dst_item = char_info->InventoryItem[equip_slot_index];
-    WORD dst_item_id = dst_item ? dst_item->ID : 0;
-
-    // (2) Place into equipment slot (swaps existing item to cursor).
-    dst_slot->HandleLButtonUp();
-
-    if (dst_item_id && char_info->CursorItem && char_info->CursorItem->ID == dst_item_id) {
-      // (3) Put the swapped-out item back in the bag slot we emptied.
-      src_slot->HandleLButtonUp();
-    }
-    success = true;
-  }
-
-  // Nothing may be left on the cursor: a refused put-back (a bag slot the window has not
-  // refreshed yet, a slot that will not take the item) used to strand the weapon there, which
-  // then blocked every later swap. Auto-inventory finds it a slot; the next swap finds it by
-  // id and name wherever it landed.
+  // Nothing may be left on the cursor: a swap that fails halfway (the second pickup refused) would
+  // strand the item there, which then blocks every later swap. Auto-inventory finds it a slot; the
+  // next swap finds it by id and name wherever it landed.
   if (char_info->CursorItem) {
     if (Zeal::Game::can_inventory_item(char_info->CursorItem)) {
       Zeal::Game::print_chat("Bandoleer: %s did not fit back in its slot, auto-inventoried.",
@@ -260,11 +217,7 @@ bool Bandoleer::swap_item(int bag_slot_id, int equip_slot_index) {
                              char_info->CursorItem->Name);
     }
   }
-
-  wnd_mgr->ShiftKeyState = shift;
-  wnd_mgr->ControlKeyState = ctrl;
-  wnd_mgr->AltKeyState = alt;
-  return success;
+  return error == nullptr;
 }
 
 // Swaps the configured instruments into the equipment slots for the active section.
