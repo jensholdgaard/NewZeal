@@ -70,6 +70,12 @@ inline constexpr const char *kEverquestCharacterAttackMetric = "everquest.charac
 
 inline constexpr const char *kEverquestCharacterHasteMetric = "everquest.character.haste";
 
+inline constexpr const char *kEverquestCharacterHpMetric = "everquest.character.hp";
+
+inline constexpr const char *kEverquestCharacterHpLimitMetric = "everquest.character.hp.limit";
+
+inline constexpr const char *kEverquestCharacterHpMinMetric = "everquest.character.hp.min";
+
 inline constexpr const char *kEverquestCharacterStatMetric = "everquest.character.stat";
 
 inline constexpr const char *kEverquestCombatDamageMetric = "everquest.combat.damage";

@@ -60,6 +60,10 @@ class OtlpExporter {
     long long attack = 0;
     bool have_haste = false;
     long long haste = 0;
+    // Current and maximum hit points from the client's own HP labels, i.e. including gear, buffs and
+    // AAs, exactly as the player window shows them.
+    bool have_hp = false;
+    long long hp = 0, hp_max = 0;
     // The group's leader names the group; empty when ungrouped. Members includes the local
     // character, and names people who are not running Zeal at all - which is the point: without it
     // a group only ever appears as the subset of it that reports telemetry.
