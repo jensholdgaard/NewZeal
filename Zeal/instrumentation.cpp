@@ -49,6 +49,14 @@ struct CharacterState {
   long long haste = 0;
   bool have_attack = false;
   bool have_haste = false;
+  // Hit points as the HP bar shows them. `hp_min` is the low-water mark since the last collection:
+  // lowered on every game frame, reset to the current value each time the SDK collects it. A gauge
+  // keeps only the value at collection, and a raid boss's 1.1 s rounds can take a tank from full to
+  // dead and back to full between two 5 s exports - the dip is the whole question, so it gets kept.
+  long long hp = 0;
+  long long hp_max = 0;
+  long long hp_min = 0;
+  bool have_hp = false;
   bool valid = false;
 };
 CharacterState g_state;
@@ -212,6 +220,33 @@ void LockoutExpiryCallback(opentelemetry::metrics::ObserverResult result, void *
 void AttackCallback(opentelemetry::metrics::ObserverResult result, void *) { ObserveGauge(result, false); }
 void HasteCallback(opentelemetry::metrics::ObserverResult result, void *) { ObserveGauge(result, true); }
 
+enum class Hp { kCurrent, kLimit, kMin };
+
+void ObserveHp(opentelemetry::metrics::ObserverResult result, Hp which) {
+  long long value = 0;
+  std::string character, zone;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_state.valid || !g_state.have_hp || g_character.empty()) return;
+    character = g_character;
+    zone = g_state.zone;
+    value = which == Hp::kCurrent ? g_state.hp : which == Hp::kLimit ? g_state.hp_max : g_state.hp_min;
+    // The low-water mark covers one collection interval, so reading it starts the next one.
+    if (which == Hp::kMin) g_state.hp_min = g_state.hp;
+  }
+  Attributes attrs = {
+      {everquest_semconv::kEverquestCharacterName, character.c_str()},
+      {everquest_semconv::kEverquestZoneName, zone.c_str()},
+  };
+  auto observer = opentelemetry::nostd::get<
+      opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObserverResultT<int64_t>>>(result);
+  observer->Observe(value, opentelemetry::common::KeyValueIterableView<Attributes>(attrs));
+}
+
+void HpCallback(opentelemetry::metrics::ObserverResult result, void *) { ObserveHp(result, Hp::kCurrent); }
+void HpLimitCallback(opentelemetry::metrics::ObserverResult result, void *) { ObserveHp(result, Hp::kLimit); }
+void HpMinCallback(opentelemetry::metrics::ObserverResult result, void *) { ObserveHp(result, Hp::kMin); }
+
 // Registered once. Holding the instruments alive matters: dropping them would unregister the
 // callbacks and the gauges would silently stop reporting.
 void EnsureGauges() {
@@ -239,6 +274,31 @@ void EnsureGauges() {
     g->AddCallback(StatCallback, nullptr);
     return g;
   }();
+  static auto hp = [] {
+    auto g = metrics_api::Provider::GetMeterProvider()
+                 ->GetMeter(kScopeName, kScopeVersion)
+                 ->CreateInt64ObservableGauge(everquest_semconv::kEverquestCharacterHpMetric,
+                                              "current hit points", "{hitpoint}");
+    g->AddCallback(HpCallback, nullptr);
+    return g;
+  }();
+  static auto hp_limit = [] {
+    auto g = metrics_api::Provider::GetMeterProvider()
+                 ->GetMeter(kScopeName, kScopeVersion)
+                 ->CreateInt64ObservableGauge(everquest_semconv::kEverquestCharacterHpLimitMetric,
+                                              "maximum hit points", "{hitpoint}");
+    g->AddCallback(HpLimitCallback, nullptr);
+    return g;
+  }();
+  static auto hp_min = [] {
+    auto g = metrics_api::Provider::GetMeterProvider()
+                 ->GetMeter(kScopeName, kScopeVersion)
+                 ->CreateInt64ObservableGauge(everquest_semconv::kEverquestCharacterHpMinMetric,
+                                              "lowest hit points since the previous collection",
+                                              "{hitpoint}");
+    g->AddCallback(HpMinCallback, nullptr);
+    return g;
+  }();
   // The spawn timers. These were parsed but never exported after the move to the SDK
   // (2026-09-04): the maps in the exporter were write-only and the dashboard read "no data".
   static auto kills = [] {
@@ -260,6 +320,9 @@ void EnsureGauges() {
   (void)attack;
   (void)haste;
   (void)stats;
+  (void)hp;
+  (void)hp_limit;
+  (void)hp_min;
 }
 
 void Add(Counter &counter, long long amount, Attributes &attrs) {
@@ -293,6 +356,22 @@ void SetCharacterState(const std::string &zone, long long attack, bool have_atta
   g_state.haste = haste;
   g_state.have_haste = have_haste;
   g_state.valid = true;
+}
+
+void SetCharacterHitpoints(long long current, long long max) {
+  EnsureGauges();
+  std::lock_guard<std::mutex> lock(g_mutex);
+  // A fresh character (or the first sample) starts its low-water mark at the current value rather
+  // than at whatever the last one left behind.
+  if (!g_state.have_hp || current < g_state.hp_min) g_state.hp_min = current;
+  g_state.hp = current;
+  g_state.hp_max = max;
+  g_state.have_hp = true;
+}
+
+void ClearCharacterHitpoints() {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  g_state.have_hp = false;
 }
 
 void RecordDamage(const std::string &source, const std::string &source_type, const std::string &direction,

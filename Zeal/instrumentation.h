@@ -26,6 +26,14 @@ void SetCharacter(const std::string &name);
 void SetCharacterState(const std::string &zone, long long attack, bool have_attack, long long haste,
                        bool have_haste);
 
+// Hit points as the HP bar shows them, called every game frame. Backs three gauges:
+// everquest.character.hp, .hp.limit and .hp.min - the last being the lowest value seen since the
+// previous collection, which is why this wants every frame and not one sample per export.
+void SetCharacterHitpoints(long long current, long long max);
+// No HP reading this frame (out of game, or the labels were not available): stop reporting rather
+// than flatline, and start the next character's low-water mark fresh.
+void ClearCharacterHitpoints();
+
 // A raid lockout as the server announced it at the kill: unix seconds of the kill and of the
 // expiry. Observed by two gauges (everquest.raid.kill.timestamp, everquest.raid.lockout.expiry,
 // both in seconds, per target) until the lockout lifts, then dropped - the spawn-timer panels

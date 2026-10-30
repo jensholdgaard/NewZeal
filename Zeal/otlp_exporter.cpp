@@ -384,6 +384,10 @@ OtlpExporter::OtlpExporter(ZealService *zeal) {
         zeal::instrumentation::SetCharacterStats(snapshot.str, snapshot.sta, snapshot.dex, snapshot.agi,
                                                  snapshot.wis, snapshot.intel, snapshot.cha);
       }
+      if (snapshot.in_game && snapshot.have_hp)
+        zeal::instrumentation::SetCharacterHitpoints(snapshot.hp, snapshot.hp_max);
+      else
+        zeal::instrumentation::ClearCharacterHitpoints();
     }
 #endif
   });
@@ -860,6 +864,23 @@ void OtlpExporter::sample_game_state() {
     if (zeal->labels_hook && zeal->labels_hook->GetLabel(23, offense)) {  // 23 = CurrentOffense (attack rating).
       s.have_attack = true;
       s.attack = atoll(offense.c_str());
+    }
+    // Hit points from the HP labels (17/18 cur/max in the EQType table - see emit_profile), so the
+    // value is the one the player window draws, gear, buffs and AAs included; the self spawn's own
+    // HpCurrent comes from the server's HP packet, which the client then adjusts on its own.
+    // Every frame on purpose: the .hp.min gauge is a low-water mark, and a 1.1 s raid round that
+    // lands between two exports is exactly the dip it exists to keep.
+    if (zeal->labels_hook) {
+      auto read = [&](int type, long long &out) {
+        std::string text;
+        zeal->labels_hook->GetLabel(type, text);  // its bool is not a success flag for every id; the text is
+        char *end = nullptr;
+        const long v = std::strtol(text.c_str(), &end, 10);
+        if (text.empty() || end == text.c_str()) return false;
+        out = v;
+        return true;
+      };
+      s.have_hp = read(17, s.hp) && read(18, s.hp_max) && s.hp_max > 0;
     }
     // Group roster. GroupInfo.Names is a fixed array gated by IsValidList, and does not include the
     // local character, so add it explicitly - otherwise the reporting player is missing from their
