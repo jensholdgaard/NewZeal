@@ -25,6 +25,10 @@ static void __fastcall LMouseUp(void *game, int unused_edx, short x, short y) {
 RaidBars::RaidBars(ZealService *zeal) {
   zeal->callbacks->AddGeneric([this]() { CallbackRender(); }, callback_type::RenderUI);
   zeal->callbacks->AddGeneric([this]() { Clean(); }, callback_type::EnterZone);
+  // Layout moves are paced from the main loop; zoning drops any still queued. Kept out of Clean(),
+  // which also runs on a DX reset - that must not cancel a half-sent layout.
+  zeal->callbacks->AddGeneric([this]() { layout.Tick(); }, callback_type::MainLoop);
+  zeal->callbacks->AddGeneric([this]() { layout.Clean(); }, callback_type::EnterZone);
   zeal->callbacks->AddGeneric([this]() { Clean(); }, callback_type::CleanUI);  // Note: new_ui only call.
   zeal->callbacks->AddGeneric([this]() { Clean(); }, callback_type::DXReset);  // Just release all resources.
   zeal->callbacks->AddGeneric([this]() { Clean(); }, callback_type::DXCleanDevice);
@@ -87,6 +91,7 @@ void RaidBars::ParseArgs(const std::vector<std::string> &args) {
   }
 
   if (manage.ParseManageArgs(args)) return;
+  if (layout.ParseArgs(args)) return;
 
   if (args.size() >= 2 && args[1] == "groups") {
     if (args.size() == 3 && (args[2] == "on" || args[2] == "off"))
@@ -257,6 +262,7 @@ void RaidBars::ParseArgs(const std::vector<std::string> &args) {
   Zeal::Game::print_chat("Usage: /raidbars groups <on | off | toggle>");
   Zeal::Game::print_chat("Usage: /raidbars showall <on | off | toggle>");
   Zeal::Game::print_chat("Usage: /raidbars autoregroup <on | off | toggle>");
+  Zeal::Game::print_chat("Usage: /raidbars layout <list | show | save | apply | stop> (see /raidbars layout)");
   Zeal::Game::print_chat("Usage: /raidbars always <class list> where list is like 'WAR PAL SHD'");
   Zeal::Game::print_chat("Usage: /raidbars never <class list> where list is like 'WAR PAL SHD'");
   Zeal::Game::print_chat("Usage: /raidbars priority <class list> where list is like 'WAR PAL SHD ENC'");

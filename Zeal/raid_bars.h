@@ -8,6 +8,7 @@
 #include "bitmap_font.h"
 #include "game_structures.h"
 #include "raid_bars_manage.h"
+#include "raid_layout.h"
 #include "zeal_settings.h"
 
 class RaidBars {
@@ -106,4 +107,5 @@ class RaidBars {
   std::array<int, kNumGroupLabelSlots> visible_group_index;
 
   RaidBarsManage manage{*this};  // Manage mode handler.
+  RaidLayout layout;             // /raidbars layout: saved group arrangements.
 };

@@ -388,6 +388,7 @@ ___
                    `groups <on | off | toggle>`: Switches between listing by class prioritization or by groups \
                    `showall <on | off>`: Class mode: Disables health thresholding, Group mode: Shows empty slots \
                    `autoregroup <on | off>`: Auto-regroups raid members to their former group when they rejoin the raid \
+                   `layout <list | show name | save name [names] | apply name [go] | stop>`: Saved arrangements of the raid groups in `zeal_raidlayouts.ini` (game folder, shared by all characters). Each group is a line of slots by class: `[potime]` then `1=WAR CLR CLR SHM BRD ENC`. A slot is a class, alternatives like `CLR|DRU`, a role (`TANK`, `PRIEST`, `MELEE`, `CASTER`, `HYBRID`), `*` for anyone, or a character name to pin someone. `save` writes the current raid by class (or by name with `names`). `apply` previews the plan; `apply name go` sends the `#raidmove`s, one per 1.2 s (raid leader and guild officer only). Members the layout does not place leave the groups it defines; groups it leaves out are not touched \
                    `never <classes list>`: Never shows classes in the list (class prio mode only) \
                    `always <classes list>`: Like showall but only applies to classes in list (class prio mode only) \
                    `priority <classes list>`: Sets listing order of classes (class prio mode only) \
@@ -399,6 +400,7 @@ ___
                      Control + Click: Move to another group (must control click on destination group #) \
   - **Example:** `/raidbars position 5 10` Constrains bars to a box from (x=5,y=10) to right and bottom screen edge.
   - **Example:** `/raidbars position 5 10 300 250` Constrains bars to a box from (x=5,y=10) to (x=300, y=250).
+  - **Example:** `/raidbars layout apply potime` Previews how the current raid fits the `potime` layout; `/raidbars layout apply potime go` makes the moves.
   - **Example:** `/raidbars showall on` Shows healthbars of all raid members (including 100% health, out of zone)
   - **Example:** `/raidbars always WAR PAL SHD ENC` These classes are always shown (even w/out showall on)
   - **Example:** `/raidbars never SHM NEC` These classes are never shown (even w/ showall on)
