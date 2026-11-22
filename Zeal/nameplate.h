@@ -1,7 +1,9 @@
 #pragma once
 #include <Windows.h>
 
+#include <filesystem>
 #include <functional>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -58,6 +60,7 @@ class NamePlate {
                                             [this](bool val) { synchronize_pretty_print(); }};
   ZealSetting<bool> setting_tag_prettyprint = {false, "Zeal", "NameplateTagPrettyPrint", false};
   ZealSetting<bool> setting_tag_default_arrow = {true, "Zeal", "NameplateTagDefaultArrow", false};
+  ZealSetting<bool> setting_tag_persist = {false, "Zeal", "NameplateTagPersist", false};
   ZealSetting<bool> setting_tag_alternate_symbols = {false, "Zeal", "NameplateTagAlternateSymbols", false};
   ZealSetting<std::string> setting_tag_channel = {"", "Zeal", "NameplateTagChannel", false};
 
@@ -101,6 +104,9 @@ class NamePlate {
   ZealSetting<bool> setting_raid_health_bars = {false, "Zeal", "NameplateRaidHealthBars", false};
   ZealSetting<bool> setting_mana_bars = {false, "Zeal", "NameplateManaBars", false};
   ZealSetting<bool> setting_stamina_bars = {false, "Zeal", "NameplateStaminaBars", false};
+  ZealSetting<bool> setting_tick_bar = {false, "Zeal", "NameplateTickBar", false};
+  ZealSetting<bool> setting_cast_bars = {false, "Zeal", "NameplateCastBars", false};
+  ZealSetting<bool> setting_cast_bars_players = {false, "Zeal", "NameplateCastBarsPlayers", false};
   ZealSetting<bool> setting_zeal_fonts = {false, "Zeal", "NamePlateZealFonts", false, [this](bool val) { clean_ui(); }};
   ZealSetting<bool> setting_drop_shadow = {false, "Zeal", "NamePlateDropShadow", false,
                                            [this](bool val) { clean_ui(); }};
@@ -125,6 +131,21 @@ class NamePlate {
     std::string tag_text;
     DWORD color;
     DWORD tag_color;
+    bool corpse_tag = false;  // The tag was set on the corpse (a tag from before the death stays hidden).
+    bool tag_synced = false;  // Matched against the saved tags since this entry was created.
+  };
+
+  struct SavedTag {
+    std::string name;  // Stripped entity name, so a reused spawn id with another name is not restored.
+    std::string text;  // Without the trailing newline.
+    DWORD color;
+    int minute;  // Minutes since the epoch when last seen, for expiry.
+  };
+
+  struct CastInfo {
+    WORD spell_id;
+    DWORD start_ms;     // Display GameTimeMs at the start of the cast.
+    DWORD duration_ms;  // Self: actual cast time. Others: base cast time from the server.
   };
 
   struct RenderInfo {
@@ -144,6 +165,8 @@ class NamePlate {
   bool is_group_member(const Zeal::GameStructures::Entity &entity) const;
   bool is_raid_member(const Zeal::GameStructures::Entity &entity) const;
   bool is_hp_updated(const Zeal::GameStructures::Entity *entity) const;
+  void handle_cast_packet(UINT opcode, const char *buffer, UINT len);
+  int get_cast_percent(const Zeal::GameStructures::Entity *entity);
   void handle_tag_command(const std::vector<std::string> &args);
   bool handle_tag_target(const std::string &target_text);
   bool handle_zeal_spam_filter(short &channel, std::string &msg);
@@ -158,6 +181,9 @@ class NamePlate {
   void synchronize_pretty_print() const;
   void check_raid_shownames();
   void set_shownames_value(int value, bool update_ui);
+  void sync_saved_tags();
+  void load_saved_tags();
+  void write_saved_tags();
 
   void clean_ui();
   void render_ui();
@@ -166,9 +192,16 @@ class NamePlate {
   std::unique_ptr<SpriteFont> sprite_font;
   std::unique_ptr<class TagArrows> tag_arrows;
   std::unordered_map<struct Zeal::GameStructures::Entity *, NamePlateInfo> nameplate_info_map;
+  std::unordered_map<WORD, CastInfo> cast_info_map;  // Active casts keyed by spawn id.
   std::function<void()> update_options_ui_callback;
   std::function<unsigned int(int)> get_color_callback;
   int tag_channel_number = -1;
   int normal_shownames = -1;           // Cached value of overridden /shownames setting.
   bool raid_shownames_active = false;  // Tracks whether raid override is active.
+
+  std::map<std::string, SavedTag> saved_tags;  // Keyed by "zone:spawn id", or by name for players.
+  std::filesystem::path saved_tags_filename;
+  std::string saved_tags_character;  // The character saved_tags_filename belongs to.
+  bool saved_tags_dirty = false;
+  ULONGLONG saved_tags_next_sync = 0;
 };

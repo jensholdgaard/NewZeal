@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 #include <unordered_map>
 #include <vector>
 
@@ -14,17 +15,39 @@ class ItemDisplay {
 
   std::vector<Zeal::GameUI::ItemDisplayWnd *> get_windows() { return windows; }  // For short-term use only.
 
+  // The dedicated window mouseover_display borrows for its tooltip (nullptr before InitUI).
+  Zeal::GameUI::ItemDisplayWnd *get_mouseover_window() { return mouseover_window; }
+
   bool close_latest_window();
   void add_to_cache(const Zeal::GameStructures::GAMEITEMINFO *item);
   const Zeal::GameStructures::GAMEITEMINFO *get_cached_item(int item_id) const;
+  // Notifies registered listeners each time an item display window is filled with an item.
+  void add_set_item_callback(std::function<void(const Zeal::GameStructures::GAMEITEMINFO *item)> callback) {
+    set_item_callbacks.push_back(callback);
+  }
+  void handle_set_item(const Zeal::GameStructures::GAMEITEMINFO *item);
   ZealSetting<bool> setting_enhanced_spell_info = {true, "Zeal", "EnhancedSpellInfo", false};
+  ZealSetting<bool> setting_show_spell_id = {false, "Zeal", "ShowSpellId", false};
+  ZealSetting<bool> setting_mouseover_tooltips = {false, "Zeal", "MouseoverTooltips", false};
+  // 0 = no override; the tooltip window's native/default size is the max.
+  ZealSetting<int> setting_mouseover_max_width = {0, "Zeal", "MouseoverMaxWidth", false};
+  ZealSetting<int> setting_mouseover_max_height = {0, "Zeal", "MouseoverMaxHeight", false};
+  // false = only Shift+wheel scrolls the tooltip; true = plain wheel too, except in scrollable lists.
+  ZealSetting<bool> setting_mouseover_smart_scroll = {false, "Zeal", "MouseoverSmartScroll", false};
+  void set_mouseover_tooltips(bool enabled);
 
  private:
   void InitUI();
   void CleanUI();
   void DeactivateUI();
+  // Creates an ItemDisplayWnd and fixes up its child/sibling relationships (shared by the pool
+  // windows and the dedicated mouseover window).
+  Zeal::GameUI::ItemDisplayWnd *create_display_window();
   const int max_item_displays = 5;
   std::vector<Zeal::GameUI::ItemDisplayWnd *> windows;
+  // Dedicated tooltip window owned here but driven by mouseover_display; never persists to the ini.
+  Zeal::GameUI::ItemDisplayWnd *mouseover_window = nullptr;
 
   std::unordered_map<int, Zeal::GameStructures::GAMEITEMINFO> item_cache;  // Cache of all displayed items.
+  std::vector<std::function<void(const Zeal::GameStructures::GAMEITEMINFO *item)>> set_item_callbacks;
 };

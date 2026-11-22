@@ -2245,7 +2245,7 @@ Zeal::GameStructures::GAMEITEMINFO *get_inventory_item_from_global_slot_id(int s
   int bag_index = (slot_id - GAME_CONTAINER_SLOTS_START) % GAME_NUM_CONTAINER_SLOTS;
 
   auto bag = char_info->InventoryPackItem[bag_slot];
-  if (!bag) {
+  if (!bag || bag->Type != 1) {
     if (print_error) Zeal::Game::print_chat(USERCOLOR_SPELL_FAILURE, "You don't have a bag in Slot %i", bag_slot + 1);
     return nullptr;
   }
@@ -2355,6 +2355,12 @@ int get_spell_level(int spell_id) {
   if (!spell) return -1;
 
   return spell->ClassLevel[char_info->Class];
+}
+
+const Zeal::GameStructures::SPELL *get_spell_from_id(int spell_id) {
+  const auto *spell_mgr = Zeal::Game::get_spell_mgr();
+  if (spell_id < 1 || spell_id >= GAME_NUM_SPELLS || !spell_mgr) return nullptr;
+  return spell_mgr->Spells[spell_id];
 }
 
 const char *get_spell_name(int spell_id) {
@@ -3480,8 +3486,8 @@ static int get_offense(const Zeal::GameEnums::SkillType skill, bool verbose = fa
   if (char_info->is_spell_affecting_pc(0x982)) {
     spell_atk -= 100;
     item_atk += 100;
-    item_atk = min(250, item_atk);  //  RuleI(Character, ItemATKCap), client == 250.
   }
+  item_atk = min(250, item_atk);  //  RuleI(Character, ItemATKCap), client == 250.
 
   int offense = skill_value + spell_atk + item_atk + stat_bonus;
 

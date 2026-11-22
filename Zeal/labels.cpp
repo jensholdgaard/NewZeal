@@ -18,6 +18,15 @@ void default_empty(Zeal::GameUI::CXSTR *str, bool *override_color, ULONG *color)
   Zeal::Game::CXStr_PrintString(str, "");
 }
 
+// Returns horizontal target distance if <= 250.
+static int get_target_distance() {
+  auto self = Zeal::Game::get_self();
+  auto target = Zeal::Game::get_target();
+  if (!self || !target) return 0;
+  int distance = static_cast<int>(self->Position.Dist2D(Zeal::Game::get_target()->Position));
+  return (distance < 250) ? distance : 0;
+}
+
 bool GetLabelFromEq(int type, Zeal::GameUI::CXSTR *str, bool *override_color, ULONG *color) {
   ZealService *zeal = ZealService::get_instance();
   if (!Zeal::Game::is_in_game())
@@ -25,14 +34,24 @@ bool GetLabelFromEq(int type, Zeal::GameUI::CXSTR *str, bool *override_color, UL
                                                                                               color);
   switch (type) {
     case 28:
-      if (str && Zeal::Game::get_target() && zeal->labels_hook->setting_show_target_spawn_id.get()) {
-        // Append the spawn ID if enabled.
-        const char *name = Zeal::Game::trim_name(Zeal::Game::get_target()->Name);
-        char *global_target_buffer = reinterpret_cast<char *>(0x00630884);  // Hard-coded 0x100 global buffer.
-        snprintf(global_target_buffer, 0x100, "%s (%d)", name, Zeal::Game::get_target()->SpawnId);
-        str->Set(global_target_buffer);  // Native client code copies to the global buffer then does the set.
-        if (override_color) *override_color = false;
-        return true;
+      if (str && Zeal::Game::get_target()) {
+        bool show_spawn_id = zeal->labels_hook->setting_show_target_spawn_id.get();  // Append the spawn ID.
+        bool show_distance = zeal->labels_hook->setting_show_target_distance.get();  // Append the distance.
+        int distance = show_distance ? get_target_distance() : 0;
+        show_distance = show_distance && distance > 0;
+        if (show_spawn_id || show_distance) {
+          const char *name = Zeal::Game::trim_name(Zeal::Game::get_target()->Name);
+          char *global_target_buffer = reinterpret_cast<char *>(0x00630884);  // Hard-coded 0x100 global buffer.
+          if (show_spawn_id && show_distance)
+            snprintf(global_target_buffer, 0x100, "%s (%d, %d)", name, Zeal::Game::get_target()->SpawnId, distance);
+          else if (show_spawn_id)
+            snprintf(global_target_buffer, 0x100, "%s (%d)", name, Zeal::Game::get_target()->SpawnId);
+          else
+            snprintf(global_target_buffer, 0x100, "%s (%d)", name, distance);
+          str->Set(global_target_buffer);  // Native client code copies to the global buffer then does the set.
+          if (override_color) *override_color = false;
+          return true;
+        }
       }
       break;
     case 29:
@@ -96,6 +115,33 @@ bool GetLabelFromEq(int type, Zeal::GameUI::CXSTR *str, bool *override_color, UL
     case 86: {
       if (!zeal->experience) return true;
       Zeal::Game::CXStr_PrintString(str, "%.f", zeal->experience->get_aa_exp_per_hour_pct());
+      *override_color = false;
+      return true;
+    }
+    case 87: {  // Distance to the target. Blank beyond 250 units, the same limit as the pipe's target_loc.
+      auto *self = Zeal::Game::get_self();
+      auto *target = Zeal::Game::get_target();
+      double distance = (self && target && target != self) ? target->Position.Dist2D(self->Position) : -1;
+      if (distance < 0 || distance >= 250) {
+        default_empty(str, override_color, color);
+        return true;
+      }
+      Zeal::Game::CXStr_PrintString(str, "%.0f", distance);
+      *override_color = false;
+      return true;
+    }
+    case 88:    // Target level.
+    case 89: {  // Target class, short form (WAR, CLR, ...).
+      // Blank for corpses, and for /anonymous or /roleplay players, whose level and class /who hides.
+      auto *target = Zeal::Game::get_target();
+      if (!target || target->Type > 1 || (target->Type == 0 && target->AnonymousState)) {
+        default_empty(str, override_color, color);
+        return true;
+      }
+      if (type == 88)
+        Zeal::Game::CXStr_PrintString(str, "%d", target->Level);
+      else
+        Zeal::Game::CXStr_PrintString(str, "%s", Zeal::Game::class_name_short(target->Class).c_str());
       *override_color = false;
       return true;
     }
@@ -363,6 +409,11 @@ Labels::Labels(ZealService *zeal) {
       Zeal::Game::print_chat("Show target spawn id: %s", setting_show_target_spawn_id.get() ? "ON" : "OFF");
       return true;
     }
+    if (args.size() == 2 && Zeal::String::compare_insensitive(args[1], "showtargetdistance")) {
+      setting_show_target_distance.toggle();
+      Zeal::Game::print_chat("Show target distance (if < 250): %s", setting_show_target_distance.get() ? "ON" : "OFF");
+      return true;
+    }
     if (args.size() == 2 && Zeal::String::compare_insensitive(args[1], "print")) {
       for (int i = 0; i < 200; i++) {
         Zeal::GameUI::CXSTR tmp("");
@@ -379,6 +430,7 @@ Labels::Labels(ZealService *zeal) {
 
     Zeal::Game::print_chat("Usage: /labels print (prints out all labels and values)");
     Zeal::Game::print_chat("       /labels showtargetspawnid (toggles the spawn id visibility)");
+    Zeal::Game::print_chat("       /labels showtargetdistance (toggles the target distance visibility)");
     return true;
   });
 

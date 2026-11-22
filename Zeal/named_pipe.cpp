@@ -13,6 +13,7 @@
 #include "game_functions.h"
 #include "game_structures.h"
 #include "hook_wrapper.h"
+#include "item_display.h"
 #include "labels.h"
 #include "string_util.h"
 #include "tick.h"
@@ -329,6 +330,19 @@ void NamedPipe::main_loop() {
         player_data["target_level"] = target->Level;
         player_data["target_class"] = target->Class;  // ClassTypes
         player_data["target_race"] = target->Race;    // RACE_x
+        // Appearance. Same-name spawns that share level, class and race can still be
+        // backed by different database rows that render differently (body texture,
+        // gender, model size), and all of that is visible on screen.
+        player_data["target_texture"] = target->Texture;
+        player_data["target_gender"] = target->Gender;  // GENDER_x
+        player_data["target_size"] = target->Height;    // Model height / scale.
+        // Worn equipment as rendered: 7 material slots (head, chest, arms, wrist, hands,
+        // legs, feet) followed by the primary and secondary item types.
+        nlohmann::json equipment = nlohmann::json::array();
+        for (int i = 0; i < 7; ++i) equipment.push_back(target->EquipmentMaterialType[i]);
+        equipment.push_back(target->EquipmentPrimaryItemType);
+        equipment.push_back(target->EquipmentSecondaryItemType);
+        player_data["target_equipment"] = equipment;
         // The target's position is only exported while it is close to the player
         // (server policy), so this can't be used to locate spawns across a zone.
         auto self = Zeal::Game::get_self();  // This is known to be non-null from above.
@@ -338,7 +352,16 @@ void NamedPipe::main_loop() {
         if (distance_sq < 250.f * 250.f) player_data["target_loc"] = toJson(target->Position);
       }
       const auto *actor_info = Zeal::Game::get_self()->ActorInfo;
-      if (actor_info && actor_info->PetID > 0) player_data["pet_id"] = actor_info->PetID;
+      if (actor_info && actor_info->PetID > 0) {
+        player_data["pet_id"] = actor_info->PetID;
+        // No distance cap here (unlike target_loc): this is the player's own pet, and Zeal's map already draws it
+        // at any distance.
+        const auto *pet = Zeal::Game::get_entity_by_id(actor_info->PetID);
+        if (pet) {
+          player_data["pet_loc"] = toJson(pet->Position);
+          player_data["pet_heading"] = pet->Heading;
+        }
+      }
       // nlohmann::json data = { {"zone", Zeal::Game::get_self()->ZoneId}, {"location",
       // Zeal::Game::get_self()->Position.toJson() }, {"heading", Zeal::Game::get_self()->Heading}, {"autoattack",
       // (bool)(*(BYTE*)0x7f6ffe)} };
@@ -458,9 +481,33 @@ void NamedPipe::write(const char *format, ...) {
   write(std::string(buffer));
 }
 
+void NamedPipe::write_death(const Zeal::Packets::Death_Struct &death) {
+  nlohmann::json death_data = nlohmann::json::object();
+  death_data["spawn_id"] = death.spawn_id;
+  const auto *ent = Zeal::Game::get_entity_by_id(static_cast<short>(death.spawn_id));
+  if (ent) {
+    death_data["name"] = std::string(Zeal::Game::trim_name(ent->Name));
+    death_data["type"] = ent->Type;  // EntityTypes
+    death_data["level"] = ent->Level;
+  }
+  // killer_id is 0 when the server reports no killer (e.g. a damage over time tick).
+  death_data["killer_id"] = death.killer_id;
+  const auto *killer = death.killer_id ? Zeal::Game::get_entity_by_id(static_cast<short>(death.killer_id)) : nullptr;
+  if (killer) death_data["killer_name"] = std::string(Zeal::Game::trim_name(killer->Name));
+  write(death_data.dump(), pipe_data_type::death);
+}
+
+// Sent when an item display window is filled (an item link was clicked, or an item was inspected
+// from an inventory, bank, loot or merchant slot).
+void NamedPipe::write_item(int item_id, const std::string &name) {
+  if (!is_connected()) return;
+  nlohmann::json item_data = {{"item_id", item_id}, {"name", name}};
+  write(item_data.dump(), pipe_data_type::item);
+}
+
 void NamedPipe::update_delay(unsigned new_delay) {
   pipe_delay.set(new_delay);
-  Zeal::Game::print_chat("pipe delay is now set to %i", pipe_delay);
+  Zeal::Game::print_chat("pipe delay is now set to %i", pipe_delay.get());
 }
 
 // Adds the handle to the thread protected transfer queue.
@@ -480,6 +527,9 @@ NamedPipe::NamedPipe(ZealService *zeal) {
   zeal->tick->AddTickCallback([this]() { chat_msg(TICK_MESSAGE, 0); });
   zeal->chat_hook->add_print_chat_callback([this](const char *data, int color_index) { chat_msg(data, color_index); });
   zeal->callbacks->AddGeneric([this]() { main_loop(); });
+  zeal->item_displays->add_set_item_callback([this](const Zeal::GameStructures::GAMEITEMINFO *item) {
+    write_item(item->ID, std::string(item->Name, strnlen(item->Name, sizeof(item->Name))));
+  });
   zeal->commands_hook->Add("/pipedelay", {}, "delay between the pipe loop output in milliseconds",
                            [this](std::vector<std::string> &args) {
                              if (args.size() > 1) {
@@ -514,6 +564,16 @@ NamedPipe::NamedPipe(ZealService *zeal) {
     return true;  // return true to stop the game from processing any further on this command,
                   // false if you want to just add features to an existing cmd
   });
+  // Death events. The server sends OP_Death to every client in the zone, but a "has been slain" chat
+  // message only shows up for some of those deaths, so a log reader misses most kills in a large raid.
+  // Handled before the client processes the packet so that the entities still carry their live names.
+  zeal->callbacks->AddPacket(
+      [this](UINT opcode, char *buffer, UINT len) {
+        if (opcode == Zeal::Packets::DeathDamage && len >= sizeof(Zeal::Packets::Death_Struct) && is_connected())
+          write_death(*reinterpret_cast<Zeal::Packets::Death_Struct *>(buffer));
+        return false;  // continue processing
+      },
+      callback_type::WorldMessage);
   // zeal->hooks->Add("logtextfile", 0x5240dc, log_hook, hook_type_detour); //receiving this via print chat so we can
   // get color indexes
   name += std::to_string(GetCurrentProcessId());
