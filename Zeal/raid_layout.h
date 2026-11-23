@@ -18,8 +18,9 @@
 // Applying sends one #raidmove per member that has to move. The server allows that only for a guild
 // officer who is the raid leader, and only one per second, so the moves are queued and paced.
 //
-// "apply <name> keep" goes on reconciling after the first pass: every few seconds it re-plans
-// against the live raid and moves whoever has joined, come back or drifted. Members already in a
+// "apply <name> keep" is "apply <name> go" run again every few seconds: each round re-reads the
+// layout from the file and re-plans against the live raid, moving whoever has joined, come back or
+// drifted - and following any edit to the layout itself. Members already in a
 // matching group stay put, so a settled raid produces no moves.
 class RaidLayout {
  public:
@@ -69,7 +70,7 @@ class RaidLayout {
   static int TokenSpecificity(const std::string &token);
   static bool IsNameToken(const std::string &token);
 
-  bool LoadLayout(const std::string &name, std::vector<std::vector<std::string>> &layout) const;
+  bool LoadLayout(const std::string &name, std::vector<std::vector<std::string>> &layout, bool quiet = false) const;
   void Save(const std::string &name, bool by_name);
   void List() const;
   void Show(const std::string &name) const;
@@ -85,7 +86,6 @@ class RaidLayout {
   // Keep mode: the layout being held, and how often each member has been sent to the same group
   // without arriving there (the server refused, or someone else moved them back).
   std::string keep_name;
-  std::vector<std::vector<std::string>> keep_layout;
   ULONGLONG next_reconcile_ms = 0;
   std::vector<std::pair<Move, int>> attempts;
 };

@@ -122,7 +122,8 @@ std::vector<RaidLayout::Member> RaidLayout::ReadRaid() {
   return members;
 }
 
-bool RaidLayout::LoadLayout(const std::string &name, std::vector<std::vector<std::string>> &layout) const {
+bool RaidLayout::LoadLayout(const std::string &name, std::vector<std::vector<std::string>> &layout,
+                            bool quiet) const {
   IO_ini ini(kLayoutFilename);
   layout.assign(kNumGroups, {});
   bool any = false;
@@ -131,14 +132,15 @@ bool RaidLayout::LoadLayout(const std::string &name, std::vector<std::vector<std
     if (!ini.exists(name, key)) continue;
     auto tokens = split_tokens(ini.getValue<std::string>(name, key));
     if (tokens.size() > kGroupSize) {
-      Zeal::Game::print_chat("Layout %s: group %d lists %d slots, only the first %d count.", name.c_str(), g + 1,
+      if (!quiet)
+        Zeal::Game::print_chat("Layout %s: group %d lists %d slots, only the first %d count.", name.c_str(), g + 1,
                              static_cast<int>(tokens.size()), kGroupSize);
       tokens.resize(kGroupSize);
     }
     if (!tokens.empty()) any = true;
     layout[g] = tokens;
   }
-  if (!any) Zeal::Game::print_chat("No layout named %s in zeal_raidlayouts.ini.", name.c_str());
+  if (!any && !quiet) Zeal::Game::print_chat("No layout named %s in zeal_raidlayouts.ini.", name.c_str());
   return any;
 }
 
@@ -296,7 +298,6 @@ void RaidLayout::Apply(const std::string &name, bool go, bool keep) {
                            static_cast<int>((queue.size() * kMoveSpacingMs + 999) / 1000));
   if (keep) {
     keep_name = name;
-    keep_layout = layout;
     next_reconcile_ms = GetTickCount64() + kReconcileMs;
     Zeal::Game::print_chat("Keeping layout %s: members who join or return are placed automatically. "
                            "/raidbars layout stop ends it.",
@@ -313,8 +314,16 @@ void RaidLayout::Reconcile() {
     Stop();
     return;
   }
+  // Re-read the file every round, exactly as "apply <name> go" would, so edits to the layout take
+  // effect mid-raid. Warnings were shown by the first apply; they aren't repeated every round.
+  std::vector<std::vector<std::string>> layout;
+  if (!LoadLayout(keep_name, layout, true)) {
+    Zeal::Game::print_chat("Raid layout %s no longer kept: it is gone from zeal_raidlayouts.ini.", keep_name.c_str());
+    Stop();
+    return;
+  }
   Plan plan;
-  if (!BuildPlan(keep_layout, plan)) return;
+  if (!BuildPlan(layout, plan)) return;
 
   // A member sent to the same group kMaxAttempts times without arriving is left alone, so a
   // refused move (or a fight with someone else's /raidbars autoregroup) doesn't loop forever.
@@ -392,7 +401,6 @@ void RaidLayout::Clean() {
 void RaidLayout::Stop() {
   Clean();
   keep_name.clear();
-  keep_layout.clear();
   attempts.clear();
 }
 
