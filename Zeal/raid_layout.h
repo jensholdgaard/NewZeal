@@ -59,7 +59,7 @@ class RaidLayout {
 
   struct Plan {
     std::vector<std::vector<std::string>> groups;  // Per group: "Name (CLS)" in slot order, for display.
-    std::vector<std::string> unfilled;              // "group 3: WIZ" for slots nobody matched.
+    std::vector<std::string> unfilled;              // "group 3: WIZ CLR", per group; open '*' slots left out.
     std::vector<Move> moves;                        // In an order that never moves into a full group.
     int staying = 0;
   };

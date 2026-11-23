@@ -201,15 +201,20 @@ bool RaidLayout::BuildPlan(const std::vector<std::vector<std::string>> &layout, 
     target[i] = (g != kUngrouped && !layout[g].empty()) ? kUngrouped : g;
   }
 
+  // Unfilled slots are reported one line per group. An open '*' slot is just spare room, not a
+  // gap, so it isn't reported at all (a big layout's filler groups otherwise flood the chat).
   plan.groups.assign(kNumGroups, {});
+  std::vector<std::string> missing(kNumGroups);
   for (const auto &slot : slots) {
     if (slot.member < 0) {
-      plan.unfilled.push_back("group " + std::to_string(slot.group + 1) + ": " + slot.token);
+      if (slot.token != "*") missing[slot.group] += (missing[slot.group].empty() ? "" : " ") + slot.token;
       continue;
     }
     const auto &m = members[slot.member];
     plan.groups[slot.group].push_back(m.name + " (" + Zeal::Game::class_name_short(m.class_id) + ")");
   }
+  for (int g = 0; g < kNumGroups; ++g)
+    if (!missing[g].empty()) plan.unfilled.push_back("group " + std::to_string(g + 1) + ": " + missing[g]);
 
   // Order the moves against a running count per group: a move only goes out once its destination
   // has room. Leaving moves (to ungrouped, or out of a group) come first and make that room.
@@ -263,10 +268,10 @@ void RaidLayout::Apply(const std::string &name, bool go, bool keep) {
   if (!BuildPlan(layout, plan)) return;
 
   for (int g = 0; g < kNumGroups; ++g) {
-    if (layout[g].empty()) continue;
+    if (layout[g].empty() || plan.groups[g].empty()) continue;  // Nobody to show.
     std::string line;
     for (const auto &entry : plan.groups[g]) line += (line.empty() ? "" : ", ") + entry;
-    Zeal::Game::print_chat("Group %d: %s", g + 1, line.empty() ? "(nobody)" : line.c_str());
+    Zeal::Game::print_chat("Group %d: %s", g + 1, line.c_str());
   }
   for (const auto &u : plan.unfilled) Zeal::Game::print_chat("Unfilled: %s", u.c_str());
   Zeal::Game::print_chat("Layout %s: %d moves, %d already in place.", name.c_str(),
