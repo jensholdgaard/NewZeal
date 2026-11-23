@@ -400,7 +400,7 @@ ___
                      Control + Click: Move to another group (must control click on destination group #) \
   - **Example:** `/raidbars position 5 10` Constrains bars to a box from (x=5,y=10) to right and bottom screen edge.
   - **Example:** `/raidbars position 5 10 300 250` Constrains bars to a box from (x=5,y=10) to (x=300, y=250).
-  - **Example:** `/raidbars layout apply potime` Previews how the current raid fits the `potime` layout; `/raidbars layout apply potime go` makes the moves.
+  - **Example:** `/raidbars layout apply potime` Previews how the current raid fits the `potime` layout; `/raidbars layout apply potime go` makes the moves. `/raidbars layout apply potime keep` makes them and then keeps the raid in that layout: every 5 seconds it places members who joined or came back, and gives up on anyone whose move didn't take after 3 tries. It ends with `/raidbars layout stop` or when you stop being raid leader, and survives zoning. Turn off `/raidbars autoregroup` while it runs, or the two will fight.
   - **Example:** `/raidbars showall on` Shows healthbars of all raid members (including 100% health, out of zone)
   - **Example:** `/raidbars always WAR PAL SHD ENC` These classes are always shown (even w/out showall on)
   - **Example:** `/raidbars never SHM NEC` These classes are never shown (even w/ showall on)

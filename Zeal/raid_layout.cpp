@@ -256,7 +256,7 @@ bool RaidLayout::BuildPlan(const std::vector<std::vector<std::string>> &layout, 
   return true;
 }
 
-void RaidLayout::Apply(const std::string &name, bool go) {
+void RaidLayout::Apply(const std::string &name, bool go, bool keep) {
   std::vector<std::vector<std::string>> layout;
   if (!LoadLayout(name, layout)) return;
   Plan plan;
@@ -283,24 +283,74 @@ void RaidLayout::Apply(const std::string &name, bool go) {
     Zeal::Game::print_chat("Only the raid leader can move raid members.");
     return;
   }
+  Stop();
   queue = plan.moves;
-  queue_index = 0;
-  next_move_ms = 0;
   if (!queue.empty())
     Zeal::Game::print_chat("Sending %d moves, about %d seconds. /raidbars layout stop cancels.",
                            static_cast<int>(queue.size()),
                            static_cast<int>((queue.size() * kMoveSpacingMs + 999) / 1000));
+  if (keep) {
+    keep_name = name;
+    keep_layout = layout;
+    next_reconcile_ms = GetTickCount64() + kReconcileMs;
+    Zeal::Game::print_chat("Keeping layout %s: members who join or return are placed automatically. "
+                           "/raidbars layout stop ends it.",
+                           name.c_str());
+  }
+}
+
+// Keep mode: re-plan against the live raid and queue whatever moved out of line. Runs only while
+// nothing is queued, so a round always finishes before the next is planned.
+void RaidLayout::Reconcile() {
+  Zeal::GameStructures::RaidInfo *raid_info = Zeal::Game::RaidInfo;
+  if (!raid_info->is_in_raid() || !raid_info->IsLeader) {
+    Zeal::Game::print_chat("Raid layout %s no longer kept: you are not the raid leader.", keep_name.c_str());
+    Stop();
+    return;
+  }
+  Plan plan;
+  if (!BuildPlan(keep_layout, plan)) return;
+
+  // A member sent to the same group kMaxAttempts times without arriving is left alone, so a
+  // refused move (or a fight with someone else's /raidbars autoregroup) doesn't loop forever.
+  std::vector<std::pair<Move, int>> next_attempts;
+  queue.clear();
+  queue_index = 0;
+  for (const auto &move : plan.moves) {
+    int count = 0;
+    for (const auto &[m, c] : attempts)
+      if (m.name == move.name && m.to == move.to) count = c;
+    if (count < kMaxAttempts) queue.push_back(move);
+    if (count == kMaxAttempts) {  // Said once, on the first round it is skipped.
+      if (move.to == kUngrouped)
+        Zeal::Game::print_chat("Raid layout: %s won't leave their group, leaving them.", move.name.c_str());
+      else
+        Zeal::Game::print_chat("Raid layout: %s won't move to group %d, leaving them.", move.name.c_str(),
+                               move.to + 1);
+    }
+    next_attempts.push_back({move, std::min(count + 1, kMaxAttempts + 1)});
+  }
+  attempts = std::move(next_attempts);  // Members now in place drop out and start fresh.
+  if (!queue.empty())
+    Zeal::Game::print_chat("Raid layout %s: placing %d member%s.", keep_name.c_str(), static_cast<int>(queue.size()),
+                           queue.size() == 1 ? "" : "s");
 }
 
 void RaidLayout::Tick() {
-  if (queue_index >= queue.size()) return;
   const ULONGLONG now = GetTickCount64();
+  if (queue_index >= queue.size()) {
+    if (!keep_name.empty() && now >= next_reconcile_ms) {
+      next_reconcile_ms = now + kReconcileMs;
+      Reconcile();
+    }
+    return;
+  }
   if (now < next_move_ms) return;
 
   Zeal::GameStructures::RaidInfo *raid_info = Zeal::Game::RaidInfo;
   if (!raid_info->is_in_raid() || !raid_info->IsLeader) {
     Zeal::Game::print_chat("Raid layout stopped: no longer the raid leader.");
-    Clean();
+    Stop();
     return;
   }
 
@@ -319,8 +369,11 @@ void RaidLayout::Tick() {
   Zeal::Game::do_say(true, "#raidmove %s %d", move.name.c_str(), move.to == kUngrouped ? 0 : move.to + 1);
   next_move_ms = now + kMoveSpacingMs;
   if (queue_index >= queue.size()) {
-    Zeal::Game::print_chat("Raid layout: all moves sent.");
-    Clean();
+    if (keep_name.empty()) Zeal::Game::print_chat("Raid layout: all moves sent.");
+    queue.clear();
+    queue_index = 0;
+    // Give the server time to report the last moves before keep mode re-plans.
+    next_reconcile_ms = now + kReconcileMs;
   }
 }
 
@@ -328,6 +381,14 @@ void RaidLayout::Clean() {
   queue.clear();
   queue_index = 0;
   next_move_ms = 0;
+  next_reconcile_ms = GetTickCount64() + kZoneGraceMs;
+}
+
+void RaidLayout::Stop() {
+  Clean();
+  keep_name.clear();
+  keep_layout.clear();
+  attempts.clear();
 }
 
 void RaidLayout::Save(const std::string &name, bool by_name) {
@@ -380,7 +441,7 @@ void RaidLayout::PrintUsage() const {
   Zeal::Game::print_chat("Usage: /raidbars layout list");
   Zeal::Game::print_chat("Usage: /raidbars layout show <name>");
   Zeal::Game::print_chat("Usage: /raidbars layout save <name> [names] (by class unless 'names')");
-  Zeal::Game::print_chat("Usage: /raidbars layout apply <name> [go] (preview unless 'go')");
+  Zeal::Game::print_chat("Usage: /raidbars layout apply <name> [go|keep] (preview unless go; keep holds the layout)");
   Zeal::Game::print_chat("Usage: /raidbars layout stop");
 }
 
@@ -394,12 +455,13 @@ bool RaidLayout::ParseArgs(const std::vector<std::string> &args) {
     Show(args[3]);
   } else if (sub == "save" && (args.size() == 4 || (args.size() == 5 && args[4] == "names"))) {
     Save(args[3], args.size() == 5);
-  } else if (sub == "apply" && (args.size() == 4 || (args.size() == 5 && args[4] == "go"))) {
-    Apply(args[3], args.size() == 5);
+  } else if (sub == "apply" && (args.size() == 4 || (args.size() == 5 && (args[4] == "go" || args[4] == "keep")))) {
+    const bool keep = args.size() == 5 && args[4] == "keep";
+    Apply(args[3], args.size() == 5, keep);
   } else if (sub == "stop" && args.size() == 3) {
-    const bool running = queue_index < queue.size();
-    Clean();
-    Zeal::Game::print_chat(running ? "Raid layout moves cancelled." : "No raid layout moves running.");
+    const bool running = queue_index < queue.size() || !keep_name.empty();
+    Stop();
+    Zeal::Game::print_chat(running ? "Raid layout stopped." : "No raid layout running.");
   } else {
     PrintUsage();
   }

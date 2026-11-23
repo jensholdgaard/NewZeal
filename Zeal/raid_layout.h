@@ -17,6 +17,10 @@
 //
 // Applying sends one #raidmove per member that has to move. The server allows that only for a guild
 // officer who is the raid leader, and only one per second, so the moves are queued and paced.
+//
+// "apply <name> keep" goes on reconciling after the first pass: every few seconds it re-plans
+// against the live raid and moves whoever has joined, come back or drifted. Members already in a
+// matching group stay put, so a settled raid produces no moves.
 class RaidLayout {
  public:
   RaidLayout() = default;
@@ -27,14 +31,20 @@ class RaidLayout {
   // Main loop: sends the next queued move when its time has come.
   void Tick();
 
-  // Zoning or leaving the raid drops anything still queued.
+  // Zoning drops anything still queued; a kept layout resumes after a short grace period.
   void Clean();
+
+  // Ends the layout entirely: queued moves and keep mode.
+  void Stop();
 
  private:
   static constexpr int kNumGroups = 12;
   static constexpr int kGroupSize = 6;
   static constexpr int kUngrouped = -1;
   static constexpr ULONGLONG kMoveSpacingMs = 1200;  // Server rate limit is one move per second.
+  static constexpr ULONGLONG kReconcileMs = 5000;    // How often keep mode re-plans.
+  static constexpr ULONGLONG kZoneGraceMs = 10000;   // Let raid info settle after zoning.
+  static constexpr int kMaxAttempts = 3;             // Moves of one member that didn't take.
 
   struct Member {
     std::string name;
@@ -63,11 +73,19 @@ class RaidLayout {
   void Save(const std::string &name, bool by_name);
   void List() const;
   void Show(const std::string &name) const;
-  void Apply(const std::string &name, bool go);
+  void Apply(const std::string &name, bool go, bool keep);
+  void Reconcile();
   bool BuildPlan(const std::vector<std::vector<std::string>> &layout, Plan &plan) const;
   void PrintUsage() const;
 
   std::vector<Move> queue;
   size_t queue_index = 0;
   ULONGLONG next_move_ms = 0;
+
+  // Keep mode: the layout being held, and how often each member has been sent to the same group
+  // without arriving there (the server refused, or someone else moved them back).
+  std::string keep_name;
+  std::vector<std::vector<std::string>> keep_layout;
+  ULONGLONG next_reconcile_ms = 0;
+  std::vector<std::pair<Move, int>> attempts;
 };
