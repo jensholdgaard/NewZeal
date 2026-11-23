@@ -1,5 +1,4 @@
 #include "item_display.h"
-#include "mouseover_display.h"
 
 #include <algorithm>
 #include <array>
@@ -12,6 +11,7 @@
 #include "game_addresses.h"
 #include "game_functions.h"
 #include "hook_wrapper.h"
+#include "mouseover_display.h"
 #include "string_util.h"
 #include "ui_skin.h"
 #include "zeal.h"
@@ -21,8 +21,8 @@
 // Creates an ItemDisplayWnd and fixes up the child/sibling relationships that Create() leaves
 // misconfigured. Note: Create() also reassigns the global Zeal::Game::Windows->ItemWnd to the new
 // window, so the last window created ends up being the game's hold-right-click window.
-Zeal::GameUI::ItemDisplayWnd *ItemDisplay::create_display_window() {
-  Zeal::GameUI::ItemDisplayWnd *new_wnd = Zeal::GameUI::ItemDisplayWnd::Create(0);
+Zeal::GameUI::ItemDisplayWnd* ItemDisplay::create_display_window() {
+  Zeal::GameUI::ItemDisplayWnd* new_wnd = Zeal::GameUI::ItemDisplayWnd::Create(0);
   if (!new_wnd) return nullptr;
   // new_wnd->SetupCustomVTable();  // Re-enable this and the deleter if custom vtables are required.
 
@@ -52,7 +52,7 @@ void ItemDisplay::InitUI() {
   if (mouseover_window) mouseover_window->EnableINIStorage = 0;
 
   for (int i = 0; i < max_item_displays; i++) {
-    Zeal::GameUI::ItemDisplayWnd *new_wnd = create_display_window();
+    Zeal::GameUI::ItemDisplayWnd* new_wnd = create_display_window();
     if (!new_wnd) {
       Zeal::Game::print_chat("Error: Memory allocation failed in ItemDisplay");
       break;
@@ -62,9 +62,8 @@ void ItemDisplay::InitUI() {
     // Set up independent ini settings for these new windows and reload using the new name.
     new_wnd->EnableINIStorage = 0x19;  // Magic value to use the INIStorageName.
     new_wnd->INIStorageName.Set(std::format("ZealItemDisplay{}", i));
-    auto vtable = static_cast<Zeal::GameUI::ItemDisplayVTable *>(new_wnd->vtbl);
-    auto load_ini =
-        reinterpret_cast<void(__fastcall *)(Zeal::GameUI::ItemDisplayWnd *, int unused)>(vtable->LoadIniInfo);
+    auto vtable = static_cast<Zeal::GameUI::ItemDisplayVTable*>(new_wnd->vtbl);
+    auto load_ini = reinterpret_cast<void(__fastcall*)(Zeal::GameUI::ItemDisplayWnd*, int unused)>(vtable->LoadIniInfo);
     load_ini(new_wnd, 0);
   }
 
@@ -75,15 +74,15 @@ void ItemDisplay::InitUI() {
 }
 
 // Returns a window to display the item or spell (use nullptr) in.
-Zeal::GameUI::ItemDisplayWnd *ItemDisplay::get_available_window(Zeal::GameStructures::GAMEITEMINFOBASE *item) {
+Zeal::GameUI::ItemDisplayWnd* ItemDisplay::get_available_window(Zeal::GameStructures::GAMEITEMINFOBASE* item) {
   if (item) {
     /*check if the item is already being displayed*/
-    for (auto &w : windows) {
+    for (auto& w : windows) {
       if (w->IsVisible && w->ItemValid && w->Item.ID == item->ID) return w;
     }
   }
 
-  for (auto &w : windows) {
+  for (auto& w : windows) {
     if (!w->IsVisible) return w;
   }
   return windows.empty() ? nullptr : windows.back();
@@ -92,7 +91,7 @@ Zeal::GameUI::ItemDisplayWnd *ItemDisplay::get_available_window(Zeal::GameStruct
 bool ItemDisplay::close_latest_window() {
   // We don't keep track of the latest, so just close starting from the end of the list.
   for (auto rit = windows.rbegin(); rit != windows.rend(); ++rit) {
-    Zeal::GameUI::ItemDisplayWnd *wnd = *rit;
+    Zeal::GameUI::ItemDisplayWnd* wnd = *rit;
     if (wnd->IsVisible) {
       wnd->Deactivate();
       return true;
@@ -110,8 +109,8 @@ static int GetEffectiveCastingLevelBonus() {
   return jam_fest_rank > 0 ? (jam_fest_rank * 2 - 1) : 0;
 }
 
-static int GetCastingLevel(Zeal::GameStructures::GAMECHARINFO *char_info, Zeal::GameStructures::SPELL *spell,
-                           Zeal::GameStructures::GAMEITEMINFO *item = nullptr) {
+static int GetCastingLevel(Zeal::GameStructures::GAMECHARINFO* char_info, Zeal::GameStructures::SPELL* spell,
+                           Zeal::GameStructures::GAMEITEMINFO* item = nullptr) {
   if (item && item->Type == 0 && item->Common.CastingLevel > 0) {
     if (item->Common.Skill == Zeal::GameEnums::ItemTypePotion) {
       // Only potions with specific spell IDs use the item's casting level, the rest use caster's level
@@ -126,9 +125,9 @@ static int GetCastingLevel(Zeal::GameStructures::GAMECHARINFO *char_info, Zeal::
   return char_info->Level + GetEffectiveCastingLevelBonus();
 }
 
-static short CalculateEffectAtLevel(std::string &value_str, Zeal::GameStructures::SPELL *spell, BYTE casting_level,
+static short CalculateEffectAtLevel(std::string& value_str, Zeal::GameStructures::SPELL* spell, BYTE casting_level,
                                     BYTE effect_index, int bardmodifier = 10) {
-  Zeal::GameStructures::GAMECHARINFO *char_info = Zeal::Game::get_char_info();
+  Zeal::GameStructures::GAMECHARINFO* char_info = Zeal::Game::get_char_info();
   if (!char_info) return 0;
   BYTE effect = spell->Attrib[effect_index];
   short value = spell->CalculateAffectChange(char_info, casting_level, effect_index);
@@ -187,14 +186,14 @@ static std::string CopperToAll(unsigned long long copper) {
   return result.str();
 }
 
-static std::string GetSpellClassLevels(const Zeal::GameStructures::_GAMEITEMINFO &item, const std::string &original) {
+static std::string GetSpellClassLevels(const Zeal::GameStructures::_GAMEITEMINFO& item, const std::string& original) {
   if (item.Type != 0 || item.Common.Skill != 0x14) return original;
 
-  const auto *spell_mgr = Zeal::Game::get_spell_mgr();
+  const auto* spell_mgr = Zeal::Game::get_spell_mgr();
   int spell_id = item.Common.SpellIdEx;
   if (spell_id < 1 || spell_id >= GAME_NUM_SPELLS || !spell_mgr) return original;
 
-  const auto *spell = spell_mgr->Spells[spell_id];
+  const auto* spell = spell_mgr->Spells[spell_id];
   if (!spell) return original;
 
   // Cycle through the classes adding levels.
@@ -210,7 +209,7 @@ static std::string GetSpellClassLevels(const Zeal::GameStructures::_GAMEITEMINFO
   return result;
 }
 
-static void ApplyRestictionHighlight(Zeal::GameStructures::_GAMEITEMINFO *item, std::string &s) {
+static void ApplyRestictionHighlight(Zeal::GameStructures::_GAMEITEMINFO* item, std::string& s) {
   // Highlights the section in green/red based on if the player passes the restriction
 
   std::string lineSearchString;
@@ -221,15 +220,15 @@ static void ApplyRestictionHighlight(Zeal::GameStructures::_GAMEITEMINFO *item, 
     lineSearchString = Zeal::Game::race_name_short(Zeal::Game::get_char_info()->Race);
   else if (s.starts_with("Deity: "))
     lineSearchString = Zeal::Game::deity_name(Zeal::Game::get_char_info()->Deity);
-  else return;
+  else
+    return;
 
   // Add the closing color tag before the ':'
   s = s.insert(s.find(":"), "</c>");
 
   std::string highlight_color;
 
-  if (s.find(lineSearchString) != std::string::npos ||
-      s.find("ALL") != std::string::npos) {
+  if (s.find(lineSearchString) != std::string::npos || s.find("ALL") != std::string::npos) {
     highlight_color = "#00FF00";
   } else {
     highlight_color = "#FF4040";
@@ -239,7 +238,7 @@ static void ApplyRestictionHighlight(Zeal::GameStructures::_GAMEITEMINFO *item, 
   s = std::format("<c \"{}\">", highlight_color) + s;
 }
 
-static void ApplySpellInfo(Zeal::GameStructures::_GAMEITEMINFO *item, std::string &s) {
+static void ApplySpellInfo(Zeal::GameStructures::_GAMEITEMINFO* item, std::string& s) {
   if (item->Type == 0 && item->Common.Skill != Zeal::GameEnums::ItemTypeSpell && item->Common.IsStackable > 1 &&
       item->Common.IsStackable < 5) {
     // Items with Clicky/Proc/Worn Spells
@@ -285,7 +284,7 @@ static void ApplySpellInfo(Zeal::GameStructures::_GAMEITEMINFO *item, std::strin
   }
 }
 
-static void ApplyInstrumentModifiers(Zeal::GameStructures::_GAMEITEMINFO *item, std::string &s) {
+static void ApplyInstrumentModifiers(Zeal::GameStructures::_GAMEITEMINFO* item, std::string& s) {
   if (item->Type == 0 && item->Common.BardType != 0 && item->Common.BardValue > 10 && s.ends_with("Instruments") ||
       s.ends_with("Instrument Types")) {
     int modifier = (item->Common.BardValue - 10) * 10;  // 18 = +80%, 24 = +140%
@@ -294,7 +293,7 @@ static void ApplyInstrumentModifiers(Zeal::GameStructures::_GAMEITEMINFO *item, 
   }
 }
 
-static void ApplyWeaponRatio(Zeal::GameStructures::_GAMEITEMINFO *item, std::string &s) {
+static void ApplyWeaponRatio(Zeal::GameStructures::_GAMEITEMINFO* item, std::string& s) {
   if (item->Common.Damage <= 0 || item->Common.AttackDelay <= 0) return;
 
   // First handle bane lines to avoid collisions with the generic DMG search.
@@ -314,26 +313,26 @@ static void ApplyWeaponRatio(Zeal::GameStructures::_GAMEITEMINFO *item, std::str
 }
 
 // Cache of all items displayed so we can access them later if needed.
-void ItemDisplay::add_to_cache(const Zeal::GameStructures::GAMEITEMINFO *item) {
+void ItemDisplay::add_to_cache(const Zeal::GameStructures::GAMEITEMINFO* item) {
   // GAMEITEMINFO is a union of different structs with type 0 (common) the largest, so
   // we only cache the common type to ensure the copy below is valid.
   if (item && item->Type == 0) item_cache[item->ID] = *item;
 }
 
-void ItemDisplay::handle_set_item(const Zeal::GameStructures::GAMEITEMINFO *item) {
+void ItemDisplay::handle_set_item(const Zeal::GameStructures::GAMEITEMINFO* item) {
   if (!item) return;
-  for (const auto &callback : set_item_callbacks) callback(item);
+  for (const auto& callback : set_item_callbacks) callback(item);
 }
 
-const Zeal::GameStructures::GAMEITEMINFO *ItemDisplay::get_cached_item(int item_id) const {
+const Zeal::GameStructures::GAMEITEMINFO* ItemDisplay::get_cached_item(int item_id) const {
   auto it = item_cache.find(item_id);
   if (it != item_cache.end()) return &(it->second);
   return nullptr;
 }
 
-static void append_effect_description(std::string &line, Zeal::GameStructures::SPELL *spell, BYTE caster_level,
+static void append_effect_description(std::string& line, Zeal::GameStructures::SPELL* spell, BYTE caster_level,
                                       BYTE effect_index) {
-  Zeal::GameStructures::GAMECHARINFO *char_info = Zeal::Game::get_char_info();
+  Zeal::GameStructures::GAMECHARINFO* char_info = Zeal::Game::get_char_info();
   if (!char_info) return;
 
   BYTE min_level;
@@ -385,7 +384,7 @@ static void append_effect_description(std::string &line, Zeal::GameStructures::S
 }
 
 // Fixes missing effects
-static void fix_effect_line(std::string &line, Zeal::GameStructures::SPELL *spell, BYTE caster_level,
+static void fix_effect_line(std::string& line, Zeal::GameStructures::SPELL* spell, BYTE caster_level,
                             BYTE effect_index) {
   BYTE effect = spell->Attrib[effect_index];
   BYTE display_index = effect_index + 1;
@@ -414,10 +413,10 @@ static void fix_effect_line(std::string &line, Zeal::GameStructures::SPELL *spel
 
 // Help the mathematically challenged by calculating the spell effect value and
 // the durations at the casting level and appending it to the string.
-static void add_value_at_level(std::string &line, Zeal::GameStructures::SPELL *spell, int level, int bardmodifier = 10,
+static void add_value_at_level(std::string& line, Zeal::GameStructures::SPELL* spell, int level, int bardmodifier = 10,
                                bool is_buff = false) {
   if (!spell || level <= 0) return;
-  Zeal::GameStructures::GAMECHARINFO *char_info = Zeal::Game::get_char_info();
+  Zeal::GameStructures::GAMECHARINFO* char_info = Zeal::Game::get_char_info();
   if (!char_info) return;
 
   bool is_effect = line.starts_with("  ");
@@ -432,7 +431,7 @@ static void add_value_at_level(std::string &line, Zeal::GameStructures::SPELL *s
   }
 
   std::smatch effect_index_match;
-  static const char *effect_index_pattern_str = "(\\d+):.*";
+  static const char* effect_index_pattern_str = "(\\d+):.*";
   static const std::regex effect_index_pattern(effect_index_pattern_str);
   if (std::regex_search(line, effect_index_match, effect_index_pattern)) {
     int effect_index = std::stoi(effect_index_match.str(1)) - 1;
@@ -484,7 +483,7 @@ static std::string get_spell_info(int spell_id) {
 
 // Appends item focus effects to the item display text if enabled, the item has an effect,
 // and the info is available.
-static void append_item_focus_info(Zeal::GameUI::ItemDisplayWnd *wnd, Zeal::GameStructures::_GAMEITEMINFO *item) {
+static void append_item_focus_info(Zeal::GameUI::ItemDisplayWnd* wnd, Zeal::GameStructures::_GAMEITEMINFO* item) {
   if (!ZealService::get_instance()->item_displays->setting_enhanced_spell_info.get() || !wnd ||
       !wnd->DisplayText.Data || !item || item->Type != 0 || !Zeal::Game::get_self())
     return;
@@ -508,9 +507,9 @@ static void append_item_focus_info(Zeal::GameUI::ItemDisplayWnd *wnd, Zeal::Game
   wnd->DisplayText.Append(label.c_str());
 
   auto lines = Zeal::String::split_text(description, "^");
-  for (auto &line : lines) {
+  for (auto& line : lines) {
     // Hack way to filter for effects based on their lines having a starting space or two.
-    const char *prefix = line.starts_with("  ") ? "&nbsp;&nbsp;" : line.starts_with(" 1") ? "&nbsp;" : nullptr;
+    const char* prefix = line.starts_with("  ") ? "&nbsp;&nbsp;" : line.starts_with(" 1") ? "&nbsp;" : nullptr;
     if (prefix) {
       line = std::string(prefix) + line + stml_line_break;
       wnd->DisplayText.Append(line.c_str());
@@ -521,16 +520,16 @@ static void append_item_focus_info(Zeal::GameUI::ItemDisplayWnd *wnd, Zeal::Game
 
 // Appends item effects (proc, worn, click, spell scroll) to the item display text
 // if enabled and the info is available.
-static void append_item_effect_info(Zeal::GameUI::ItemDisplayWnd *wnd, Zeal::GameStructures::_GAMEITEMINFO *item) {
+static void append_item_effect_info(Zeal::GameUI::ItemDisplayWnd* wnd, Zeal::GameStructures::_GAMEITEMINFO* item) {
   if (!ZealService::get_instance()->item_displays->setting_enhanced_spell_info.get() || !wnd ||
       !wnd->DisplayText.Data || !item || item->Type != 0 || !Zeal::Game::get_self())
     return;
 
-  Zeal::GameStructures::GAMECHARINFO *char_info = Zeal::Game::get_char_info();
+  Zeal::GameStructures::GAMECHARINFO* char_info = Zeal::Game::get_char_info();
   if (!char_info) return;
   int spell_id = item->Common.SpellIdEx;
   if (spell_id < 1 || spell_id >= GAME_NUM_SPELLS) return;
-  Zeal::GameStructures::SPELL *spell =
+  Zeal::GameStructures::SPELL* spell =
       Zeal::Game::get_spell_mgr() ? Zeal::Game::get_spell_mgr()->Spells[spell_id] : nullptr;
   if (!spell) return;
 
@@ -561,7 +560,7 @@ static void append_item_effect_info(Zeal::GameUI::ItemDisplayWnd *wnd, Zeal::Gam
     wnd->DisplayText.Append(std::format("Effect casting level: {}{}", level, stml_line_break).c_str());
 
   auto lines = Zeal::String::split_text(description, "^");
-  for (auto &line : lines) {
+  for (auto& line : lines) {
     if (line.starts_with("Skill:") || line.starts_with("Mana Cost:") || line.starts_with("Classes:") || line.empty())
       continue;  // Skip redundant lines already in the base display.
     if ((is_click_effect || is_proc_effect || is_worn_effect) && line.starts_with("Cast Time:"))
@@ -588,16 +587,16 @@ static void append_item_effect_info(Zeal::GameUI::ItemDisplayWnd *wnd, Zeal::Gam
 
 // If enabled and the info is available, replace all of the text in the spell
 // display box with information from the spell_info.txt file.
-static bool UpdateSetSpellTextEnhanced(Zeal::GameUI::ItemDisplayWnd *wnd, int spell_id, bool buff = false) {
+static bool UpdateSetSpellTextEnhanced(Zeal::GameUI::ItemDisplayWnd* wnd, int spell_id, bool buff = false) {
   if (!ZealService::get_instance()->item_displays->setting_enhanced_spell_info.get() || !wnd ||
       !wnd->DisplayText.Data || !Zeal::Game::get_self())
     return false;
 
-  Zeal::GameStructures::GAMECHARINFO *char_info = Zeal::Game::get_char_info();
+  Zeal::GameStructures::GAMECHARINFO* char_info = Zeal::Game::get_char_info();
   if (!char_info) return false;
   if (spell_id < 1 || spell_id >= GAME_NUM_SPELLS) return false;
   if (!Zeal::Game::get_spell_mgr()) return false;
-  Zeal::GameStructures::SPELL *spell = Zeal::Game::get_spell_mgr()->Spells[spell_id];
+  Zeal::GameStructures::SPELL* spell = Zeal::Game::get_spell_mgr()->Spells[spell_id];
   if (!spell) return false;
 
   bool is_detrimental = spell->SpellType == 0;
@@ -607,7 +606,7 @@ static bool UpdateSetSpellTextEnhanced(Zeal::GameUI::ItemDisplayWnd *wnd, int sp
   if (buff && !is_detrimental) {
     int max_buffs = char_info->GetMaxBuffs();
     for (int i = 0; i < max_buffs; i++) {
-      Zeal::GameStructures::_GAMEBUFFINFO *buff = char_info->GetBuff(i);
+      Zeal::GameStructures::_GAMEBUFFINFO* buff = char_info->GetBuff(i);
       if (buff && buff->SpellId == spell_id) {
         level = buff->CasterLevel;
         bardmodifier = buff->Modifier;
@@ -623,7 +622,7 @@ static bool UpdateSetSpellTextEnhanced(Zeal::GameUI::ItemDisplayWnd *wnd, int sp
   wnd->DisplayText.Set("");  // Replace the SetSpell text entirely with the blob.
 
   auto lines = Zeal::String::split_text(description, "^");
-  for (auto &line : lines) {
+  for (auto& line : lines) {
     if (line.starts_with("Resist:") && !is_detrimental) continue;  // Skip resists if not a detrimental spell.
 
     add_value_at_level(line, spell, level, bardmodifier, buff);
@@ -635,13 +634,13 @@ static bool UpdateSetSpellTextEnhanced(Zeal::GameUI::ItemDisplayWnd *wnd, int sp
 }
 
 // Appends the meal or drink duration if applicable.
-static void ApplyMealTime(Zeal::GameStructures::_GAMEITEMINFO *item, std::string &s) {
+static void ApplyMealTime(Zeal::GameStructures::_GAMEITEMINFO* item, std::string& s) {
   const BYTE kSkillMeal = 0xe;
   const BYTE kSkillDrink = 0xf;
   if (item->Type != 0 || (item->Common.Skill != kSkillMeal && item->Common.Skill != kSkillDrink)) return;
 
-  static constexpr std::array<const char *, 7> kSuffixes = {" snack.",  " meal.",  " feast!", " meal!",
-                                                            " wetter.", " drink.", " drink!"};
+  static constexpr std::array<const char*, 7> kSuffixes = {" snack.",  " meal.",  " feast!", " meal!",
+                                                           " wetter.", " drink.", " drink!"};
   for (const auto suffix : kSuffixes) {
     if (s.ends_with(suffix)) {
       s += std::format(" ({})", item->Common.CastTime);
@@ -650,15 +649,42 @@ static void ApplyMealTime(Zeal::GameStructures::_GAMEITEMINFO *item, std::string
   }
 }
 
+// Appends the PoP "mod2" stats (shielding, strikethrough, ...) that Quarm's server sends in bytes
+// the stock item window never shows. Labels and units follow the PoP-era item window.
+static void append_mod2_stats(Zeal::GameUI::ItemDisplayWnd* wnd, Zeal::GameStructures::_GAMEITEMINFO* item) {
+  if (item->Type != 0) return;  // Only common items carry stats.
+  const auto& c = item->Common;
+
+  struct Stat {
+    const char* label;
+    int value;
+    bool percent;
+  };
+
+  const Stat stats[] = {
+      {"Shielding", c.Shielding, true},           {"Spell Shield", c.SpellShield, true},
+      {"Avoidance", c.Avoidance, false},          {"Accuracy", c.Accuracy, false},
+      {"Stun Resist", c.StunResist, true},        {"Strikethrough", c.StrikeThrough, true},
+      {"Combat Effects", c.CombatEffects, false}, {"Damage Shield", c.DamageShield, false},
+  };
+  std::string line;
+  for (const auto& stat : stats) {
+    if (stat.value == 0) continue;
+    if (!line.empty()) line += "  ";
+    line += std::format("{}: {:+d}{}", stat.label, stat.value, stat.percent ? "%" : "");
+  }
+  if (!line.empty()) wnd->DisplayText.Append(std::format("<c \"#7fd4ff\">{}</c><BR>", line));
+}
+
 // Generate our customized item description text.
-void UpdateSetItemText(Zeal::GameUI::ItemDisplayWnd *wnd, Zeal::GameStructures::_GAMEITEMINFO *item) {
+void UpdateSetItemText(Zeal::GameUI::ItemDisplayWnd* wnd, Zeal::GameStructures::_GAMEITEMINFO* item) {
   if (!item || wnd->DisplayText.Data == nullptr) return;
 
   // Split the existing text into separate lines, release it, and then update line by line.
   const std::string stml_line_break = "<BR>";
   auto strings = Zeal::String::split_text(std::string(wnd->DisplayText), stml_line_break);
   wnd->DisplayText.Set("");
-  for (auto &s : strings) {
+  for (auto& s : strings) {
     // Perform partial iteminfo filtering in combination with substrings.
     ApplySpellInfo(item, s);
     ApplyInstrumentModifiers(item, s);
@@ -668,13 +694,14 @@ void UpdateSetItemText(Zeal::GameUI::ItemDisplayWnd *wnd, Zeal::GameStructures::
     s += stml_line_break;
     wnd->DisplayText.Append(s.c_str());
   }
+  append_mod2_stats(wnd, item);
   if (item->NoDrop != 0) wnd->DisplayText.Append("Value: " + CopperToAll(item->Cost) + stml_line_break);
 
   append_item_effect_info(wnd, item);
   append_item_focus_info(wnd, item);
 }
 
-void __fastcall SetItem(Zeal::GameUI::ItemDisplayWnd *wnd, int unused, Zeal::GameStructures::_GAMEITEMINFO *item,
+void __fastcall SetItem(Zeal::GameUI::ItemDisplayWnd* wnd, int unused, Zeal::GameStructures::_GAMEITEMINFO* item,
                         bool show) {
   ZealService::get_instance()->hooks->hook_map["SetItem"]->original(SetItem)(wnd, unused, item, show);
 
@@ -689,7 +716,7 @@ void __fastcall SetItem(Zeal::GameUI::ItemDisplayWnd *wnd, int unused, Zeal::Gam
 }
 
 static std::string get_target_type_string(int target_type) {
-  const char *type = nullptr;
+  const char* type = nullptr;
   switch (target_type) {
     case 3:
     case 41:  // Bard songs at least.
@@ -730,28 +757,28 @@ static std::string get_target_type_string(int target_type) {
 }
 
 // Optional last line with the spell id, which buff blockers and other id-based tools need.
-static void AppendSpellId(Zeal::GameUI::ItemDisplayWnd *wnd, int spell_id) {
+static void AppendSpellId(Zeal::GameUI::ItemDisplayWnd* wnd, int spell_id) {
   if (ZealService::get_instance()->item_displays->setting_show_spell_id.get() && wnd->DisplayText.Data)
     wnd->DisplayText.Append(std::format("Spell ID: {}<BR>", spell_id));
 }
 
-void UpdateSetSpellText(Zeal::GameUI::ItemDisplayWnd *wnd, int spell_id, bool buff) {
+void UpdateSetSpellText(Zeal::GameUI::ItemDisplayWnd* wnd, int spell_id, bool buff) {
   if (UpdateSetSpellTextEnhanced(wnd, spell_id, buff)) {
     AppendSpellId(wnd, spell_id);
     return;
   }
 
-  auto *spell_mgr = Zeal::Game::get_spell_mgr();
+  auto* spell_mgr = Zeal::Game::get_spell_mgr();
   if (!spell_mgr || spell_id < 1 || spell_id >= GAME_NUM_SPELLS || wnd->DisplayText.Data == nullptr) return;
 
-  const auto *sp_data = Zeal::Game::get_spell_mgr()->Spells[spell_id];
+  const auto* sp_data = Zeal::Game::get_spell_mgr()->Spells[spell_id];
   if (!sp_data) return;
 
   const std::string stml_line_break = "<BR>";
   wnd->DisplayText.Append(get_target_type_string(sp_data->TargetType) + stml_line_break);
 
   if (sp_data->Resist >= 0 && sp_data->Resist < 6) {
-    const char *resist_lut[6] = {"Unresistable", "Magic", "Fire", "Cold", "Poison", "Disease"};  // No chromatic yet
+    const char* resist_lut[6] = {"Unresistable", "Magic", "Fire", "Cold", "Poison", "Disease"};  // No chromatic yet
     std::string resist_type(resist_lut[sp_data->Resist]);
     // std::string resist_adj = std::format(" ({:+d})", sp_data->ResistAdj);  // Unexpected values.
     wnd->DisplayText.Append("Resist: " + resist_type + stml_line_break);
@@ -763,8 +790,8 @@ void UpdateSetSpellText(Zeal::GameUI::ItemDisplayWnd *wnd, int spell_id, bool bu
   AppendSpellId(wnd, spell_id);
 }
 
-void __fastcall SetSpell(Zeal::GameUI::ItemDisplayWnd *wnd, int unused, int spell_id, bool show, int unknown) {
-  ZealService *zeal = ZealService::get_instance();
+void __fastcall SetSpell(Zeal::GameUI::ItemDisplayWnd* wnd, int unused, int spell_id, bool show, int unknown) {
+  ZealService* zeal = ZealService::get_instance();
   bool buff = !show;  // Buff bar sets show to false.
   if (!show)          // Allow enhanced spell info to enable show (else blank).
     show = ZealService::get_instance()->item_displays->setting_enhanced_spell_info.get();
@@ -775,7 +802,7 @@ void __fastcall SetSpell(Zeal::GameUI::ItemDisplayWnd *wnd, int unused, int spel
 void ItemDisplay::CleanUI() {
   mouseover_clean_ui();  // Releases the borrowed mouseover_window pointer before we destroy it.
 
-  for (auto &w : windows) {
+  for (auto& w : windows) {
     if (w) {
       if (w->IsVisible)  // Should never happen.
         w->Deactivate();
@@ -799,35 +826,35 @@ void ItemDisplay::CleanUI() {
 }
 
 void ItemDisplay::DeactivateUI() {
-  for (auto &w : windows) {
+  for (auto& w : windows) {
     if (w && w->IsVisible) w->Deactivate();  // Calls show(0) and clears IsActivated.
   }
   mouseover_deactivate_ui();
 }
 
 // Response handler for OP_LinkRequest that calls SetItem and Activate().
-void __cdecl msg_request_inspect_item(Zeal::GameStructures::_GAMEITEMINFO *item) {
-  auto *default_item_display_wnd = Zeal::Game::Windows->ItemWnd;  // Cache the default.
-  auto *wnd = ZealService::get_instance()->item_displays->get_available_window(item);
+void __cdecl msg_request_inspect_item(Zeal::GameStructures::_GAMEITEMINFO* item) {
+  auto* default_item_display_wnd = Zeal::Game::Windows->ItemWnd;  // Cache the default.
+  auto* wnd = ZealService::get_instance()->item_displays->get_available_window(item);
   if (!wnd) {
     ZealService::get_instance()->hooks->hook_map["msg_request_inspect_item"]->original(msg_request_inspect_item)(item);
     return;
   }
   Zeal::Game::Windows->ItemWnd = wnd;
-  if (Zeal::Game::Windows->ItemWnd->IsVisible) Zeal::Game::Windows->ItemWnd->Deactivate();   // Avoid double activation.
+  if (Zeal::Game::Windows->ItemWnd->IsVisible) Zeal::Game::Windows->ItemWnd->Deactivate();  // Avoid double activation.
 
   ZealService::get_instance()->hooks->hook_map["msg_request_inspect_item"]->original(msg_request_inspect_item)(item);
   Zeal::Game::Windows->ItemWnd = default_item_display_wnd;  // Restore.
 }
 
 // Replaces the default vtable callback to allow temporarily replacing the global pointer.
-static int __fastcall InvSlotWnd_HandleLButtonUp(Zeal::GameUI::InvSlotWnd *wnd, int unused_edx, int mouse_x,
+static int __fastcall InvSlotWnd_HandleLButtonUp(Zeal::GameUI::InvSlotWnd* wnd, int unused_edx, int mouse_x,
                                                  int mouse_y, unsigned int flags) {
   // If there is an item, modify the ItemWnd global pointer to point to one of our windows.
-  auto *default_item_display_wnd = Zeal::Game::Windows->ItemWnd;
+  auto* default_item_display_wnd = Zeal::Game::Windows->ItemWnd;
 
   if (wnd->IsActive && wnd->invSlot && wnd->invSlot->Item) {
-    auto *display_wnd = ZealService::get_instance()->item_displays->get_available_window(wnd->invSlot->Item);
+    auto* display_wnd = ZealService::get_instance()->item_displays->get_available_window(wnd->invSlot->Item);
     if (display_wnd) Zeal::Game::Windows->ItemWnd = display_wnd;
   }
 
@@ -840,15 +867,15 @@ static int __fastcall InvSlotWnd_HandleLButtonUp(Zeal::GameUI::InvSlotWnd *wnd, 
   return result;
 }
 
-static int __fastcall CastSpellWnd_WndNotification(Zeal::GameUI::CastSpellWnd *wnd, int unused_edx,
-                                                   Zeal::GameUI::BasicWnd *src_wnd, int param_2, void *param_3) {
+static int __fastcall CastSpellWnd_WndNotification(Zeal::GameUI::CastSpellWnd* wnd, int unused_edx,
+                                                   Zeal::GameUI::BasicWnd* src_wnd, int param_2, void* param_3) {
   // Forward all messages except for left mouse click messages with the alt key depressed.
   if (param_2 != 1 || !Zeal::Game::get_wnd_manager() || !Zeal::Game::get_wnd_manager()->AltKeyState)
     return wnd->WndNotification(src_wnd, param_2, param_3);
 
   // Temporarily modify the ItemWnd global pointer to point to one of our windows.
-  auto *default_item_display_wnd = Zeal::Game::Windows->ItemWnd;
-  auto *display_wnd = ZealService::get_instance()->item_displays->get_available_window();
+  auto* default_item_display_wnd = Zeal::Game::Windows->ItemWnd;
+  auto* display_wnd = ZealService::get_instance()->item_displays->get_available_window();
   if (!display_wnd) return wnd->WndNotification(src_wnd, param_2, param_3);
 
   Zeal::Game::Windows->ItemWnd = display_wnd;
@@ -860,15 +887,15 @@ static int __fastcall CastSpellWnd_WndNotification(Zeal::GameUI::CastSpellWnd *w
   return 0;
 }
 
-static int __fastcall SpellBookWnd_WndNotification(Zeal::GameUI::SpellBookWnd *wnd, int unused_edx,
-                                                   Zeal::GameUI::BasicWnd *src_wnd, int param_2, void *param_3) {
+static int __fastcall SpellBookWnd_WndNotification(Zeal::GameUI::SpellBookWnd* wnd, int unused_edx,
+                                                   Zeal::GameUI::BasicWnd* src_wnd, int param_2, void* param_3) {
   // Forward all messages except for left mouse click messages with the alt key depressed.
   if (param_2 != 1 || !Zeal::Game::get_wnd_manager() || !Zeal::Game::get_wnd_manager()->AltKeyState)
     return wnd->WndNotification(src_wnd, param_2, param_3);
 
   // Temporarily modify the ItemWnd global pointer to point to one of our windows.
-  auto *default_item_display_wnd = Zeal::Game::Windows->ItemWnd;
-  auto *display_wnd = ZealService::get_instance()->item_displays->get_available_window();
+  auto* default_item_display_wnd = Zeal::Game::Windows->ItemWnd;
+  auto* display_wnd = ZealService::get_instance()->item_displays->get_available_window();
 
   if (!display_wnd) return wnd->WndNotification(src_wnd, param_2, param_3);
   Zeal::Game::Windows->ItemWnd = display_wnd;
@@ -883,7 +910,7 @@ static int __fastcall SpellBookWnd_WndNotification(Zeal::GameUI::SpellBookWnd *w
   return 0;
 }
 
-ItemDisplay::ItemDisplay(ZealService *zeal) {
+ItemDisplay::ItemDisplay(ZealService* zeal) {
   if (!Zeal::Game::is_new_ui()) return;  // Old UI not supported.
 
   windows.clear();
@@ -894,7 +921,7 @@ ItemDisplay::ItemDisplay(ZealService *zeal) {
   zeal->callbacks->AddGeneric([this]() { CleanUI(); }, callback_type::CleanUI);
   zeal->callbacks->AddGeneric([this]() { DeactivateUI(); }, callback_type::DeactivateUI);
   zeal->commands_hook->Add("/spellid", {}, "Toggles (or sets on / off) the spell id line in spell info windows.",
-                           [this](std::vector<std::string> &args) {
+                           [this](std::vector<std::string>& args) {
                              if (args.size() == 1)
                                setting_show_spell_id.toggle();
                              else if (args.size() == 2 && (args[1] == "on" || args[1] == "off"))
@@ -918,19 +945,19 @@ ItemDisplay::ItemDisplay(ZealService *zeal) {
       callback_type::EnterZone);
 
   // Modify the Alt + Left Mouse click SetItem() related callback of CInvSlotWnd.
-  auto *inv_slot_wnd_vtable = Zeal::GameUI::InvSlotWnd::default_vtable;
+  auto* inv_slot_wnd_vtable = Zeal::GameUI::InvSlotWnd::default_vtable;
   mem::unprotect_memory(inv_slot_wnd_vtable, sizeof(*inv_slot_wnd_vtable));
   inv_slot_wnd_vtable->HandleLButtonUp = InvSlotWnd_HandleLButtonUp;
   mem::reset_memory_protection(inv_slot_wnd_vtable);
 
   // Modify the Alt + Left Mouse click SetItem() related callback of CastSpellWnd.
-  auto *spell_gems_wnd_vtable = Zeal::GameUI::CastSpellWnd::default_vtable;
+  auto* spell_gems_wnd_vtable = Zeal::GameUI::CastSpellWnd::default_vtable;
   mem::unprotect_memory(spell_gems_wnd_vtable, sizeof(*spell_gems_wnd_vtable));
   spell_gems_wnd_vtable->WndNotification = CastSpellWnd_WndNotification;
   mem::reset_memory_protection(spell_gems_wnd_vtable);
 
   // Modify the Alt + Left Mouse click SetItem() related callback of SpellBookWnd.
-  auto *spell_book_wnd_vtable = Zeal::GameUI::SpellBookWnd::default_vtable;
+  auto* spell_book_wnd_vtable = Zeal::GameUI::SpellBookWnd::default_vtable;
   mem::unprotect_memory(spell_book_wnd_vtable, sizeof(*spell_book_wnd_vtable));
   spell_book_wnd_vtable->WndNotification = SpellBookWnd_WndNotification;
   mem::reset_memory_protection(spell_book_wnd_vtable);

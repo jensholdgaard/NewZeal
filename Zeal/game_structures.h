@@ -551,7 +551,7 @@ struct ZoneInfo {
 
 struct GameWorldData {
   BYTE Unknown[0x1C];
-  ZoneInfo *Zones[225];
+  ZoneInfo* Zones[225];
 };
 
 typedef struct _GAMEITEMCOMMONINFO {
@@ -614,7 +614,17 @@ typedef struct _GAMEITEMCOMMONINFO {
     /* 0x0124 */ int CastTime;  // Cast time of clicky item in miliseconds
   };
 
-  /* 0x0128 */ BYTE Unknown0128[12];
+  // PoP-style "mod2" stats. eqgame.exe never reads these bytes; Quarm's server (EQMacEmu #500)
+  // fills them in, and they stay zero on servers that don't.
+  /* 0x0128 */ INT8 StrikeThrough;
+  /* 0x0129 */ INT8 StunResist;
+  /* 0x012A */ INT8 CombatEffects;
+  /* 0x012B */ INT8 Accuracy;
+  /* 0x012C */ INT8 Avoidance;
+  /* 0x012D */ INT8 SpellShield;
+  /* 0x012E */ INT8 Shielding;
+  /* 0x012F */ INT8 DamageShield;
+  /* 0x0130 */ BYTE Unknown0130[4];
   /* 0x0134 */ INT32 RecastTime;  // Recast time of clicky in milliseconds.
   /* 0x0138 */ WORD SkillModType;
   /* 0x013A */ INT16 SkillModValue;
@@ -636,7 +646,7 @@ typedef struct _GAMEITEMCOMMONINFO {
 
 typedef struct _GAMEITEMCONTAINERINFO  // Game_Container class.
 {
-  /* 0x00E4 */ struct _GAMEITEMINFO *Item[GAME_NUM_CONTAINER_SLOTS];
+  /* 0x00E4 */ struct _GAMEITEMINFO* Item[GAME_NUM_CONTAINER_SLOTS];
   /* 0x010C */ BYTE Combine;   // Type. 0-7 are bags, 9+ support combines.
   /* 0x010D */ BYTE Capacity;  // num slots
   /* 0x010E */ BYTE IsOpen;
@@ -696,28 +706,28 @@ struct ViewActor {
   /* 0x0020 */ DWORD Pitch;
   /* 0x0024 */ DWORD Roll;
   /* 0x0028 */ DWORD RegionNumber;
-  /* 0x002C */ struct _GAMEACTORCOLLISIONINFO *CollisionInfo;
+  /* 0x002C */ struct _GAMEACTORCOLLISIONINFO* CollisionInfo;
   /* 0x0030 */ DWORD Unknown0030;
   /* 0x0034 */ FLOAT ScaleFactor;
   /* 0x0038 */ FLOAT BoundingRadius;
   /* 0x003C */ BYTE Unknown003C[36];
-  /* 0x0060 */ struct Entity *Entity;
+  /* 0x0060 */ struct Entity* Entity;
 };
 
 struct GAMEDAGINFO {
   /* 0x0000 */ DWORD Unknown0000;
   /* 0x0004 */ PCHAR Name;  // x_DAG, x_POINT_DAG, etc
-  /* 0x0008 */ struct _GAMESTRINGSPRITE *StringSprite;
-  /* 0x000C */ struct _GAMEDAGINFO *Parent;
-  /* 0x0010 */ struct _GAMEMODELINFO *ModelInfo;
-  /* 0x0014 */ struct _GAMETRACKINFO *Track1;
-  /* 0x0018 */ struct _GAMETRACKINFO *Track2;
+  /* 0x0008 */ struct _GAMESTRINGSPRITE* StringSprite;
+  /* 0x000C */ struct _GAMEDAGINFO* Parent;
+  /* 0x0010 */ struct _GAMEMODELINFO* ModelInfo;
+  /* 0x0014 */ struct _GAMETRACKINFO* Track1;
+  /* 0x0018 */ struct _GAMETRACKINFO* Track2;
   /* 0x001C */ BYTE Unknown001C[0x3c];           // Possibly used in t3dGetCurrentDagFrameTransform.
   /* 0x0058 */ float ObjectToWorldTransform[9];  // Copied out in t3dGetCurrentDagObjectToWorldTransform.
   /* 0x007C */ Vec3 Position;
   /* 0x0088 */ BYTE Unknown0088[96];
   /* 0x00E8 */ DWORD NumChildren;
-  /* 0x00EC */ struct _GAMEDAGCHILDREN *Children;
+  /* 0x00EC */ struct _GAMEDAGCHILDREN* Children;
   /* ...... */
 };
 
@@ -739,8 +749,8 @@ typedef struct _GAMEARGBCOLOR {
     DWORD ARGB;
   };
 
-  _GAMEARGBCOLOR(BYTE _R, BYTE _G, BYTE _B, BYTE _A) : A(_A), R(_R), G(_G), B(_B){};
-  _GAMEARGBCOLOR(DWORD _ARGB) : ARGB(_ARGB){};
+  _GAMEARGBCOLOR(BYTE _R, BYTE _G, BYTE _B, BYTE _A) : A(_A), R(_R), G(_G), B(_B) {};
+  _GAMEARGBCOLOR(DWORD _ARGB) : ARGB(_ARGB) {};
   _GAMEARGBCOLOR() : A{}, R{}, G{}, B{} {};
 
 } GAMEARGBCOLOR;
@@ -773,8 +783,8 @@ struct ActorInfo {
   //{
   //	return reinterpret_cast<UINT(__thiscall*)(ActorInfo*, UINT, INT)>(0x50A039)(this, );
   // }
-  /* 0x0000 */ ViewActor *ViewActor_;
-  /* 0x0004 */ struct _GAMELIGHTINFO *LightInfo;  // PointLight
+  /* 0x0000 */ ViewActor* ViewActor_;
+  /* 0x0004 */ struct _GAMELIGHTINFO* LightInfo;  // PointLight
   /* 0x0008 */ char ActorDef[64];                 // xxx_ACTORDEF string (HUM_ACTORDEF, ELM_ACTORDEF, etc)
   /* 0x0048 */ FLOAT Z;
   /* 0x004C */ FLOAT ZCeiling;     // Z axis of the ceiling or first collision above player
@@ -826,12 +836,12 @@ struct ActorInfo {
   /* 0x0164 */ BYTE Unknown0164[0x20];
   /* 0x0184 */ DWORD Animation;
   /* 0x0188 */ BYTE Unknown0188[0x8];
-  /* 0x0190 */ struct Entity *AttachedEntity;
-  /* 0x0194 */ struct Entity *Mount;
-  /* 0x0198 */ struct Entity *Rider;
+  /* 0x0190 */ struct Entity* AttachedEntity;
+  /* 0x0194 */ struct Entity* Mount;
+  /* 0x0198 */ struct Entity* Rider;
   /* 0x019C */ BYTE Unknown019c[24];
   /* 0x01B4 */ DWORD IsInvisible;  // NPCs only? used by /hidecorpses command
-  /* 0x01B8 */ struct Entity *Horse;
+  /* 0x01B8 */ struct Entity* Horse;
   /* 0x01BC */ DWORD HorseSpellEffect;
   /* 0x01C0 */ WORD HorseSpellId;
   /* 0x01C2 */ SHORT PetID;
@@ -848,15 +858,15 @@ struct ActorInfo {
   /* 0x027E */ BYTE CastingSpellGemNumber;  // StartCasting:Gem #, OP_MemorizeSpell handler: 0xff. Stop: 0x0.
   /* 0x027F */ BYTE Unknown027F;
   /* 0x0280 */ BYTE Unknown0280[4];
-  /* 0x0284 */ struct _GAMEMODELINFO *ModelInfo;
-  /* 0x0288 */ GAMEDAGINFO *DagHeadPoint;
-  /* 0x028C */ GAMEDAGINFO *DagHead;
-  /* 0x0290 */ GAMEDAGINFO *DagUnknown;
-  /* 0x0294 */ GAMEDAGINFO *DagRightPoint;
-  /* 0x0298 */ GAMEDAGINFO *DagLeftPoint;
-  /* 0x029C */ GAMEDAGINFO *DagShieldPoint;
+  /* 0x0284 */ struct _GAMEMODELINFO* ModelInfo;
+  /* 0x0288 */ GAMEDAGINFO* DagHeadPoint;
+  /* 0x028C */ GAMEDAGINFO* DagHead;
+  /* 0x0290 */ GAMEDAGINFO* DagUnknown;
+  /* 0x0294 */ GAMEDAGINFO* DagRightPoint;
+  /* 0x0298 */ GAMEDAGINFO* DagLeftPoint;
+  /* 0x029C */ GAMEDAGINFO* DagShieldPoint;
   /* 0x02A0 */ BYTE Unknown02A0[0x44];
-  /* 0x02E4 */ struct Entity *Following;  // Non-zero if auto-following this entity.
+  /* 0x02E4 */ struct Entity* Following;  // Non-zero if auto-following this entity.
   /* 0x02E8 */ BYTE Unknown02E8[0x38];
   /* 0x0320 */ BYTE MovementType;  // 0 = None, 4 = Walking, 6 = Running, 7 = Swimming
   /* 0x0321 */ BYTE Unknown0321[12];
@@ -872,27 +882,27 @@ struct ActorInfo {
 };
 
 typedef struct _GAMEINVENTORY {
-  /* 00 */ struct _GAMEITEMINFO *EarLeft;
-  /* 01 */ struct _GAMEITEMINFO *Head;
-  /* 02 */ struct _GAMEITEMINFO *Face;
-  /* 03 */ struct _GAMEITEMINFO *EarRight;
-  /* 04 */ struct _GAMEITEMINFO *Neck;
-  /* 05 */ struct _GAMEITEMINFO *Shoulders;
-  /* 06 */ struct _GAMEITEMINFO *Arms;
-  /* 07 */ struct _GAMEITEMINFO *Back;
-  /* 08 */ struct _GAMEITEMINFO *WristLeft;
-  /* 09 */ struct _GAMEITEMINFO *WristRight;
-  /* 10 */ struct _GAMEITEMINFO *Ranged;
-  /* 11 */ struct _GAMEITEMINFO *Hands;
-  /* 12 */ struct _GAMEITEMINFO *Primary;
-  /* 13 */ struct _GAMEITEMINFO *Secondary;
-  /* 14 */ struct _GAMEITEMINFO *RingLeft;
-  /* 15 */ struct _GAMEITEMINFO *RingRight;
-  /* 16 */ struct _GAMEITEMINFO *Chest;
-  /* 17 */ struct _GAMEITEMINFO *Legs;
-  /* 18 */ struct _GAMEITEMINFO *Feet;
-  /* 19 */ struct _GAMEITEMINFO *Waist;
-  /* 20 */ struct _GAMEITEMINFO *Ammo;
+  /* 00 */ struct _GAMEITEMINFO* EarLeft;
+  /* 01 */ struct _GAMEITEMINFO* Head;
+  /* 02 */ struct _GAMEITEMINFO* Face;
+  /* 03 */ struct _GAMEITEMINFO* EarRight;
+  /* 04 */ struct _GAMEITEMINFO* Neck;
+  /* 05 */ struct _GAMEITEMINFO* Shoulders;
+  /* 06 */ struct _GAMEITEMINFO* Arms;
+  /* 07 */ struct _GAMEITEMINFO* Back;
+  /* 08 */ struct _GAMEITEMINFO* WristLeft;
+  /* 09 */ struct _GAMEITEMINFO* WristRight;
+  /* 10 */ struct _GAMEITEMINFO* Ranged;
+  /* 11 */ struct _GAMEITEMINFO* Hands;
+  /* 12 */ struct _GAMEITEMINFO* Primary;
+  /* 13 */ struct _GAMEITEMINFO* Secondary;
+  /* 14 */ struct _GAMEITEMINFO* RingLeft;
+  /* 15 */ struct _GAMEITEMINFO* RingRight;
+  /* 16 */ struct _GAMEITEMINFO* Chest;
+  /* 17 */ struct _GAMEITEMINFO* Legs;
+  /* 18 */ struct _GAMEITEMINFO* Feet;
+  /* 19 */ struct _GAMEITEMINFO* Waist;
+  /* 20 */ struct _GAMEITEMINFO* Ammo;
 } GAMEINVENTORY, *PGAMEINVENTORY;
 
 struct _GAMEBUFFINFO {
@@ -952,7 +962,7 @@ struct GAMECHARINFO  // common/patches/mac_structs.h::PlayerProfile_Struct
   // Returns trained rank of an AA
   int GetAbility(int aa_id) {
     if (aa_id < 1 || aa_id > 226) return 0;
-    return reinterpret_cast<int(__thiscall *)(Zeal::GameStructures::GAMECHARINFO *, int)>(0x4C3FB0)(this, aa_id);
+    return reinterpret_cast<int(__thiscall*)(Zeal::GameStructures::GAMECHARINFO*, int)>(0x4C3FB0)(this, aa_id);
   }
 
   bool is_cloth_caster() {
@@ -962,74 +972,74 @@ struct GAMECHARINFO  // common/patches/mac_structs.h::PlayerProfile_Struct
             cls == ClassTypes::Necromancer);
   }
 
-  float encum_factor() { return reinterpret_cast<float(__thiscall *)(GAMECHARINFO *)>(0x4bb9c7)(this); }
+  float encum_factor() { return reinterpret_cast<float(__thiscall*)(GAMECHARINFO*)>(0x4bb9c7)(this); }
 
-  short max_mana() { return reinterpret_cast<short(__thiscall *)(GAMECHARINFO *)>(0x4B9483)(this); }
+  short max_mana() { return reinterpret_cast<short(__thiscall*)(GAMECHARINFO*)>(0x4B9483)(this); }
 
-  short mana() { return reinterpret_cast<short(__thiscall *)(GAMECHARINFO *)>(0x4b9450)(this); }
+  short mana() { return reinterpret_cast<short(__thiscall*)(GAMECHARINFO*)>(0x4b9450)(this); }
 
-  short str() { return reinterpret_cast<short(__thiscall *)(GAMECHARINFO *)>(0x004bafcb)(this); }
+  short str() { return reinterpret_cast<short(__thiscall*)(GAMECHARINFO*)>(0x004bafcb)(this); }
 
-  short dex() { return reinterpret_cast<short(__thiscall *)(GAMECHARINFO *)>(0x004bb34e)(this); }
+  short dex() { return reinterpret_cast<short(__thiscall*)(GAMECHARINFO*)>(0x004bb34e)(this); }
 
   short compute_to_hit(char skill_type) {
-    return reinterpret_cast<short(__thiscall *)(GAMECHARINFO *, char)>(0x004b9b96)(this, skill_type);
+    return reinterpret_cast<short(__thiscall*)(GAMECHARINFO*, char)>(0x004b9b96)(this, skill_type);
   }
 
   short offense(char skill_type)  // skill_type == -1 defaults to hand-to-hand.
   {
-    return reinterpret_cast<short(__thiscall *)(GAMECHARINFO *, char)>(0x004b9dda)(this, skill_type);
+    return reinterpret_cast<short(__thiscall*)(GAMECHARINFO*, char)>(0x004b9dda)(this, skill_type);
   }
 
   short i_have_skill(int skill_type) {
-    return reinterpret_cast<short(__thiscall *)(GAMECHARINFO *, char)>(0x004bfff5)(this, skill_type);
+    return reinterpret_cast<short(__thiscall*)(GAMECHARINFO*, char)>(0x004bfff5)(this, skill_type);
   }
 
   int skill(int skill_type) {
-    return reinterpret_cast<short(__thiscall *)(GAMECHARINFO *, char)>(0x004b8efd)(this, skill_type);
+    return reinterpret_cast<short(__thiscall*)(GAMECHARINFO*, char)>(0x004b8efd)(this, skill_type);
   }
 
   short ac(bool apply_cap) {
-    return reinterpret_cast<short(__thiscall *)(GAMECHARINFO *, bool)>(0x004b9b8a)(this, apply_cap);
+    return reinterpret_cast<short(__thiscall*)(GAMECHARINFO*, bool)>(0x004b9b8a)(this, apply_cap);
   }
 
-  int compute_defense() { return reinterpret_cast<int(__thiscall *)(GAMECHARINFO *)>(0x004b9d19)(this); }
+  int compute_defense() { return reinterpret_cast<int(__thiscall*)(GAMECHARINFO*)>(0x004b9d19)(this); }
 
-  short total_spell_affects(int category, bool unknown1, short *unknown2) {
-    return reinterpret_cast<short(__thiscall *)(GAMECHARINFO *, int, bool, short *)>(0x004c6b6d)(this, category,
-                                                                                                 unknown1, unknown2);
+  short total_spell_affects(int category, bool unknown1, short* unknown2) {
+    return reinterpret_cast<short(__thiscall*)(GAMECHARINFO*, int, bool, short*)>(0x004c6b6d)(this, category, unknown1,
+                                                                                              unknown2);
   }
 
   short total_item_spell_affects(int category) {
-    return reinterpret_cast<short(__thiscall *)(GAMECHARINFO *, int)>(0x004c1235)(this, category);
+    return reinterpret_cast<short(__thiscall*)(GAMECHARINFO*, int)>(0x004c1235)(this, category);
   }
 
   bool is_spell_affecting_pc(short spell_id) {
-    return reinterpret_cast<short(__thiscall *)(GAMECHARINFO *, short)>(0x004c70e7)(this, spell_id);
+    return reinterpret_cast<short(__thiscall*)(GAMECHARINFO*, short)>(0x004c70e7)(this, spell_id);
   }
 
-  int cast(UINT gem, WORD spell_id, int *item, short item_slot) {
-    return reinterpret_cast<int(__thiscall *)(GAMECHARINFO *, UINT, WORD, int *, short)>(0x4c483b)(this, gem, spell_id,
-                                                                                                   item, item_slot);
+  int cast(UINT gem, WORD spell_id, int* item, short item_slot) {
+    return reinterpret_cast<int(__thiscall*)(GAMECHARINFO*, UINT, WORD, int*, short)>(0x4c483b)(this, gem, spell_id,
+                                                                                                item, item_slot);
   }
 
   void stop_cast(UINT reason, WORD spell_id) {
-    return reinterpret_cast<void(__thiscall *)(GAMECHARINFO *, UINT, WORD)>(0x4cb510)(this, reason, spell_id);
+    return reinterpret_cast<void(__thiscall*)(GAMECHARINFO*, UINT, WORD)>(0x4cb510)(this, reason, spell_id);
   }
 
   bool can_i_see_invis()  // CanISeeInvis()
   {
-    return reinterpret_cast<bool(__thiscall *)(GAMECHARINFO *)>(0x004c0d02)(this);
+    return reinterpret_cast<bool(__thiscall*)(GAMECHARINFO*)>(0x004c0d02)(this);
   }
 
-  _GAMEBUFFINFO *GetBuff(WORD buff_slot) {  // Supports 0..29
-    return reinterpret_cast<_GAMEBUFFINFO *(__thiscall *)(GAMECHARINFO *, WORD)>(0x004C465A)(this, buff_slot);
+  _GAMEBUFFINFO* GetBuff(WORD buff_slot) {  // Supports 0..29
+    return reinterpret_cast<_GAMEBUFFINFO*(__thiscall*)(GAMECHARINFO*, WORD)>(0x004C465A)(this, buff_slot);
   }
 
-  int GetMaxBuffs() { return reinterpret_cast<BYTE(__thiscall *)(GAMECHARINFO *)>(0x004C4637)(this); }
+  int GetMaxBuffs() { return reinterpret_cast<BYTE(__thiscall*)(GAMECHARINFO*)>(0x004C4637)(this); }
 
-  int *RemoveMyAffect(int buff_slot) {  // Supports 0..15
-    return reinterpret_cast<int *(__thiscall *)(GAMECHARINFO *, int)>(0x004d0337)(this, buff_slot);
+  int* RemoveMyAffect(int buff_slot) {  // Supports 0..15
+    return reinterpret_cast<int*(__thiscall*)(GAMECHARINFO*, int)>(0x004d0337)(this, buff_slot);
   }
 
   /* 0x0000 */ BYTE Unknown0000[2];
@@ -1098,13 +1108,13 @@ struct GAMECHARINFO  // common/patches/mac_structs.h::PlayerProfile_Struct
                                                        // passing BuffsExtIndexMinus15[n] to this array, which is the
                                                        // same struct offset. Usage not recommended.
   /* 0x0D70 */ DWORD ZoneId;
-  /* 0x0D74 */ Entity *SpawnInfo;
-  /* 0x0D78 */ _GAMEITEMINFO *CursorItem;
+  /* 0x0D74 */ Entity* SpawnInfo;
+  /* 0x0D78 */ _GAMEITEMINFO* CursorItem;
   union {
     /* 0x0D7C */ struct _GAMEINVENTORY Inventory;
-    /* 0x0D7C */ struct _GAMEITEMINFO *InventoryItem[GAME_NUM_INVENTORY_SLOTS];
+    /* 0x0D7C */ struct _GAMEITEMINFO* InventoryItem[GAME_NUM_INVENTORY_SLOTS];
   };
-  /* 0x0DD0 */ struct _GAMEITEMINFO *InventoryPackItem[GAME_NUM_INVENTORY_PACK_SLOTS];
+  /* 0x0DD0 */ struct _GAMEITEMINFO* InventoryPackItem[GAME_NUM_INVENTORY_PACK_SLOTS];
   /* 0x0DF0 */ BYTE Unknown0DF0[2];
   /* 0x0DF2 */ _GAMEBUFFINFO BuffsExt[15];  // non-PCs have access to 15 more buff slots. We can maybe use this space
                                             // for the short-buff window in the future
@@ -1166,108 +1176,107 @@ struct GAMECHARINFO  // common/patches/mac_structs.h::PlayerProfile_Struct
   // 0x20D4 */ DWORD UnusedSpace[12]; (Index '4' is set to 1 but unused, patched out).
   // };  /* 0x2104 (total size) */
   // Patched layout:
-  /* 0x20B4 */ struct _GAMEITEMINFO *InventoryBankItem[30];
-  /* 0x212C */ struct _GAMEITEMINFO *SharedBankItem[30];
+  /* 0x20B4 */ struct _GAMEITEMINFO* InventoryBankItem[30];
+  /* 0x212C */ struct _GAMEITEMINFO* SharedBankItem[30];
 }; /* 0x21A4 (total size) */
 
 struct GameClass {
-  void Invite() { reinterpret_cast<void(__thiscall *)(GameClass *)>(0x005302c1)(this); }
+  void Invite() { reinterpret_cast<void(__thiscall*)(GameClass*)>(0x005302c1)(this); }
 
-  void Follow() { reinterpret_cast<void(__thiscall *)(GameClass *)>(0x0053069c)(this); }
+  void Follow() { reinterpret_cast<void(__thiscall*)(GameClass*)>(0x0053069c)(this); }
 
-  void Disband() { reinterpret_cast<void(__thiscall *)(GameClass *)>(0x00530829)(this); }
+  void Disband() { reinterpret_cast<void(__thiscall*)(GameClass*)>(0x00530829)(this); }
 
-  BYTE IsOkToTransact() { return reinterpret_cast<BYTE(__thiscall *)(GameClass *)>(0x54825C)(this); }
+  BYTE IsOkToTransact() { return reinterpret_cast<BYTE(__thiscall*)(GameClass*)>(0x54825C)(this); }
 
-  void SetupCharSelectCamera() { reinterpret_cast<void(__thiscall *)(GameClass *)>(0x0053c7cd)(this); }
+  void SetupCharSelectCamera() { reinterpret_cast<void(__thiscall*)(GameClass*)>(0x0053c7cd)(this); }
 
-  void doInspect(struct Zeal::GameStructures::Entity *player) {
-    reinterpret_cast<void(__thiscall *)(GameClass *, Zeal::GameStructures::Entity *)>(0x54390E)(this, player);
+  void doInspect(struct Zeal::GameStructures::Entity* player) {
+    reinterpret_cast<void(__thiscall*)(GameClass*, Zeal::GameStructures::Entity*)>(0x54390E)(this, player);
   }
 
-  void DoPercentConvert(const char *buffer, int unk_flag) {
-    reinterpret_cast<void(__thiscall *)(GameClass *, const char *, int)>(0x00538110)(this, buffer, unk_flag);
+  void DoPercentConvert(const char* buffer, int unk_flag) {
+    reinterpret_cast<void(__thiscall*)(GameClass*, const char*, int)>(0x00538110)(this, buffer, unk_flag);
   }
 
-  void dsp_chat(char *data, short color, bool un) {
-    reinterpret_cast<void(__thiscall *)(GameClass *, char *, short, bool)>(0x00537f99)(this, data, color, un);
+  void dsp_chat(char* data, short color, bool un) {
+    reinterpret_cast<void(__thiscall*)(GameClass*, char*, short, bool)>(0x00537f99)(this, data, color, un);
   }
 
-  const char *GetClassDesc(int class_id) {
-    return reinterpret_cast<const char *(__thiscall *)(GameClass *, int)>(0x0052d5f1)(this, class_id);
+  const char* GetClassDesc(int class_id) {
+    return reinterpret_cast<const char*(__thiscall*)(GameClass*, int)>(0x0052d5f1)(this, class_id);
   }
 
-  const char *GetTitleDesc(int class_id, int aa_rank, int gender) {
-    return reinterpret_cast<const char *(__thiscall *)(GameClass *, int, int, int)>(0x0052eb69)(this, class_id, aa_rank,
-                                                                                                gender);
+  const char* GetTitleDesc(int class_id, int aa_rank, int gender) {
+    return reinterpret_cast<const char*(__thiscall*)(GameClass*, int, int, int)>(0x0052eb69)(this, class_id, aa_rank,
+                                                                                             gender);
   }
 
   void IssuePetCommand(int command, short spawn_id) {
-    reinterpret_cast<void(__thiscall *)(GameClass *, int, short)>(0x00547749)(this, command, spawn_id);
+    reinterpret_cast<void(__thiscall*)(GameClass*, int, short)>(0x00547749)(this, command, spawn_id);
   }
 
-  char *stripName(const char *spawn_name) {
-    return reinterpret_cast<char *(__thiscall *)(GameClass *, const char *)>(0x00537E4B)(this, spawn_name);
+  char* stripName(const char* spawn_name) {
+    return reinterpret_cast<char*(__thiscall*)(GameClass*, const char*)>(0x00537E4B)(this, spawn_name);
   }
 
-  char *trimName(const char *spawn_name) {
-    return reinterpret_cast<char *(__thiscall *)(GameClass *, const char *)>(0x00537D39)(this, spawn_name);
+  char* trimName(const char* spawn_name) {
+    return reinterpret_cast<char*(__thiscall*)(GameClass*, const char*)>(0x00537D39)(this, spawn_name);
   }
 
   /*0x000*/ BYTE Unknown0000[0x288];
-  /*0x288*/ void *ChannelServerApi;  // Pointer to ChannelServerApi object.
+  /*0x288*/ void* ChannelServerApi;  // Pointer to ChannelServerApi object.
   /*0x28C*/ BYTE Unknown028c[0x320];
   /*0x5AC*/ int game_state;  // Holds GAMESTATE_* values.
 };
 
 struct Display {
-  void SetDayPeriod(int period) { reinterpret_cast<void(__thiscall *)(Display *, int)>(0x004b177f)(this, period); }
+  void SetDayPeriod(int period) { reinterpret_cast<void(__thiscall*)(Display*, int)>(0x004b177f)(this, period); }
 
   void SetFog(int toggle, float distance, float unknown, char r, char g, char b) {
-    reinterpret_cast<void(__thiscall *)(Display *, int, float, float, char, char, char)>(0x004add26)(
+    reinterpret_cast<void(__thiscall*)(Display*, int, float, float, char, char, char)>(0x004add26)(
         this, toggle, distance, unknown, r, g, b);
   }
 
-  bool UpdatePlayerActor(Entity *actor) {
-    return reinterpret_cast<bool(__thiscall *)(Display *, Entity *)>(0x004af76e)(this, actor);
+  bool UpdatePlayerActor(Entity* actor) {
+    return reinterpret_cast<bool(__thiscall*)(Display*, Entity*)>(0x004af76e)(this, actor);
   }
 
-  void SetSunLight() { reinterpret_cast<void(__thiscall *)(Display *)>(0x004b18b1)(this); }
+  void SetSunLight() { reinterpret_cast<void(__thiscall*)(Display*)>(0x004b18b1)(this); }
 
-  void SetYon(float clip) { reinterpret_cast<void(__thiscall *)(Display *, float)>(0x004aca7f)(this, clip); }
+  void SetYon(float clip) { reinterpret_cast<void(__thiscall*)(Display*, float)>(0x004aca7f)(this, clip); }
 
   // Calls s3dCollideSphereWithWorld internally.
   char GenericSphereColl(float start_x, float start_y, float start_z, float end_x, float end_y, float end_z,
-                         float *result_x, float *result_y, float *result_z, char collision_type) {
-    return reinterpret_cast<char(__thiscall *)(Display *, float, float, float, float, float, float, float *, float *,
-                                               float *, char)>(0x004b3c45)(
+                         float* result_x, float* result_y, float* result_z, char collision_type) {
+    return reinterpret_cast<char(__thiscall*)(Display*, float, float, float, float, float, float, float*, float*,
+                                              float*, char)>(0x004b3c45)(
         this, start_x, start_y, start_z, end_x, end_y, end_z, result_x, result_y, result_z, collision_type);
   }
 
-  void KeyMapUpdated() { reinterpret_cast<void(__thiscall *)(Display *)>(0x004a7ca5)(this); }
+  void KeyMapUpdated() { reinterpret_cast<void(__thiscall*)(Display*)>(0x004a7ca5)(this); }
 
-  void HandleMaterial(Zeal::GameStructures::GAMECHARINFO *char_info, short slot_id,
-                      Zeal::GameStructures::GAMEITEMINFO *new_item, Zeal::GameStructures::GAMEITEMINFO *old_item) {
-    reinterpret_cast<void(__thiscall *)(Display *, Zeal::GameStructures::GAMECHARINFO *, short,
-                                        Zeal::GameStructures::GAMEITEMINFO *, Zeal::GameStructures::GAMEITEMINFO *)>(
+  void HandleMaterial(Zeal::GameStructures::GAMECHARINFO* char_info, short slot_id,
+                      Zeal::GameStructures::GAMEITEMINFO* new_item, Zeal::GameStructures::GAMEITEMINFO* old_item) {
+    reinterpret_cast<void(__thiscall*)(Display*, Zeal::GameStructures::GAMECHARINFO*, short,
+                                       Zeal::GameStructures::GAMEITEMINFO*, Zeal::GameStructures::GAMEITEMINFO*)>(
         0x004a28b0)(this, char_info, slot_id, new_item, old_item);
   }
 
-  void DoItemSlot(Zeal::GameStructures::Entity *self, int slot_id) {
-    reinterpret_cast<void(__thiscall *)(Display *, Zeal::GameStructures::Entity *, int)>(0x004a9c8a)(this, self,
-                                                                                                     slot_id);
+  void DoItemSlot(Zeal::GameStructures::Entity* self, int slot_id) {
+    reinterpret_cast<void(__thiscall*)(Display*, Zeal::GameStructures::Entity*, int)>(0x004a9c8a)(this, self, slot_id);
   }
 
   struct ReferenceList {
     int unknown;
     int count;           // Number of valid entries in list.
     int allocated_size;  // Allocated size of buffer.
-    int *list;           // Base of list.
+    int* list;           // Base of list.
   };
 
   /* 0x0000 */ BYTE Unknown0000[0x4];
-  /* 0x0004 */ int *World;
-  /* 0x0008 */ float *ActiveCamera;  // Pointer to camera position (source used to update CameraLocation).
+  /* 0x0004 */ int* World;
+  /* 0x0008 */ float* ActiveCamera;  // Pointer to camera position (source used to update CameraLocation).
   /* 0x000C */ BYTE Unknown000C[0x10];
   /* 0x001C */ float CameraLocation[7];  // Updated in RenderWorld with t3dGetCameraLocation.
   /* 0x0038 */ BYTE Unknown0038[0x40 - 0x38];
@@ -1284,12 +1293,12 @@ struct Display {
 struct Entity {
   void ChangeStance(BYTE new_stance) {
     if (this && this->StandingState != new_stance)
-      reinterpret_cast<void(__thiscall *)(Entity *, unsigned char)>(0x50be3c)(this, new_stance);
+      reinterpret_cast<void(__thiscall*)(Entity*, unsigned char)>(0x50be3c)(this, new_stance);
   }
 
   UINT ModifyAttackSpeed(UINT raw_delay, UINT is_bow) {
-    return reinterpret_cast<UINT(__thiscall *)(void *player, UINT raw_delay, UINT is_bow)>(0x0050a039)(this, raw_delay,
-                                                                                                       is_bow);
+    return reinterpret_cast<UINT(__thiscall*)(void* player, UINT raw_delay, UINT is_bow)>(0x0050a039)(this, raw_delay,
+                                                                                                      is_bow);
   }
 
   /* 0x0000 */ BYTE StructType;  // Magic tag set to 0x03 in constructor (if not 0x03, invalid entity pointer).
@@ -1306,11 +1315,11 @@ struct Entity {
   /* 0x006C */ FLOAT MovementSpeedHeading;
   /* 0x0070 */ FLOAT Unknown0070;
   /* 0x0074 */ FLOAT Pitch;  // camera view up/down
-  /* 0x0078 */ Entity *Prev;
-  /* 0x007C */ Entity *Next;
+  /* 0x0078 */ Entity* Prev;
+  /* 0x007C */ Entity* Next;
   /* 0x0080 */ PVOID Unknown0080;
-  /* 0x0084 */ ActorInfo *ActorInfo;
-  /* 0x0088 */ GAMECHARINFO *CharInfo;
+  /* 0x0084 */ ActorInfo* ActorInfo;
+  /* 0x0088 */ GAMECHARINFO* CharInfo;
   /* 0x008C */ FLOAT CameraHeightOffset;
   /* 0x0090 */ FLOAT ModelHeightOffset;
   /* 0x0094 */ WORD SpawnId;
@@ -1389,7 +1398,7 @@ struct GroupInfo {
   /* 0x0000 */ BYTE IsValidList[GAME_NUM_GROUP_MEMBERS];  // 1 = Valid group member, 0 = empty.
   /* 0x0005 */ CHAR Names[GAME_NUM_GROUP_MEMBERS][64];
   /* 0x0145 */ CHAR Unknown0143[3];  // Alignment padding probably.
-  /* 0x0148 */ struct Entity *EntityList[GAME_NUM_GROUP_MEMBERS];
+  /* 0x0148 */ struct Entity* EntityList[GAME_NUM_GROUP_MEMBERS];
 
   /* 0x015C */ CHAR LeaderName[64];  // Empty string is ungrouped.
 
@@ -1528,23 +1537,23 @@ struct SpellEffectRecord {
 
 struct SPELL {
   // Note: Technically this is a GAMECHARINFO::CalculateSpellDuration, but declared here for now
-  short CalculateSpellDuration(Zeal::GameStructures::GAMECHARINFO *char_info, BYTE caster_level) {
+  short CalculateSpellDuration(Zeal::GameStructures::GAMECHARINFO* char_info, BYTE caster_level) {
     if (!char_info) return 0;
-    return reinterpret_cast<short(__thiscall *)(Zeal::GameStructures::GAMECHARINFO *, Zeal::GameStructures::SPELL *,
-                                                BYTE, BYTE)>(0x4ca746)(char_info, this, caster_level, 0);
+    return reinterpret_cast<short(__thiscall*)(Zeal::GameStructures::GAMECHARINFO*, Zeal::GameStructures::SPELL*, BYTE,
+                                               BYTE)>(0x4ca746)(char_info, this, caster_level, 0);
   }
 
   // Note: Technically this is a GAMECHARINFO::CalculateAffectChange, but declared here for now
-  short CalculateAffectChange(Zeal::GameStructures::GAMECHARINFO *char_info, BYTE caster_level, BYTE effect_index,
-                              Zeal::GameStructures::_GAMEBUFFINFO *buff = nullptr) {
+  short CalculateAffectChange(Zeal::GameStructures::GAMECHARINFO* char_info, BYTE caster_level, BYTE effect_index,
+                              Zeal::GameStructures::_GAMEBUFFINFO* buff = nullptr) {
     if (!char_info) return 0;
     if (this->ID == 742 && this->Attrib[effect_index] == 0) {
       // Fix: Denon's Desperate Dirge formula not known by client
       int level = caster_level > 43 ? caster_level - 43 : 0;
       return 315 + (10 * level);
     }
-    return reinterpret_cast<short(__thiscall *)(Zeal::GameStructures::GAMECHARINFO *, Zeal::GameStructures::SPELL *,
-                                                BYTE, BYTE, Zeal::GameStructures::_GAMEBUFFINFO *)>(0x4c657d)(
+    return reinterpret_cast<short(__thiscall*)(Zeal::GameStructures::GAMECHARINFO*, Zeal::GameStructures::SPELL*, BYTE,
+                                               BYTE, Zeal::GameStructures::_GAMEBUFFINFO*)>(0x4c657d)(
         char_info, this, caster_level, effect_index, buff);
   }
 
@@ -1637,15 +1646,15 @@ struct SPELL {
   /*0x0c4*/ int RecourseSpellId;
   /*0x0c8*/ int NoPartialResist;
   /*0x0cc*/ BYTE Unknown0x0cc[0x4];
-  /*0x0d0*/ CHAR *Name;
-  /*0x0d4*/ CHAR *Target;
-  /*0x0d8*/ CHAR *Extra;  // This is 'Extra' from Lucy (portal shortnames etc)
-  /*0x0dc*/ CHAR *YouCast;
-  /*0x0e0*/ CHAR *OtherCasts;
-  /*0x0e4*/ CHAR *CastOnYou;
-  /*0x0e8*/ CHAR *CastOnAnother;  // CastOnOther
-  /*0x0ec*/ CHAR *WearOff;        // SpellFades
-  /*0x0f0*/ SpellEffectRecord *OldParticleEffect;
+  /*0x0d0*/ CHAR* Name;
+  /*0x0d4*/ CHAR* Target;
+  /*0x0d8*/ CHAR* Extra;  // This is 'Extra' from Lucy (portal shortnames etc)
+  /*0x0dc*/ CHAR* YouCast;
+  /*0x0e0*/ CHAR* OtherCasts;
+  /*0x0e4*/ CHAR* CastOnYou;
+  /*0x0e8*/ CHAR* CastOnAnother;  // CastOnOther
+  /*0x0ec*/ CHAR* WearOff;        // SpellFades
+  /*0x0f0*/ SpellEffectRecord* OldParticleEffect;
   /*0x0f4*/ int SpellAffectIndex;     // Index for OldParticleEffect, 0x3d to 0x40 = DragonBreath
   /*0x0f8*/ DWORD NewParticleEffect;  // SpellEffectPtr
   /*0x0fc*/ int SpellAnim;            // Index for NewParticleEffect ptr lookup, 0 = No new effect
@@ -1658,7 +1667,7 @@ struct SPELL {
 };
 
 struct SPELLMGR {
-  SPELL *Spells[GAME_NUM_SPELLS];
+  SPELL* Spells[GAME_NUM_SPELLS];
 };
 
 struct GameAltAbility {          // operator new of 0x38 bytes.
@@ -1691,22 +1700,21 @@ struct GameAltAbility {          // operator new of 0x38 bytes.
 
 struct AltAdvManager {  // operator new of 0x38c bytes.
 
-  static AltAdvManager *get_manager() { return *reinterpret_cast<AltAdvManager **>(0x0063d724); }
+  static AltAdvManager* get_manager() { return *reinterpret_cast<AltAdvManager**>(0x0063d724); }
 
-  int CalculateMitigationBoost(GAMECHARINFO *char_info, int softcap) {
-    return reinterpret_cast<int(__thiscall *)(AltAdvManager *, GAMECHARINFO *, int)>(0x004b7b48)(this, char_info,
-                                                                                                 softcap);
+  int CalculateMitigationBoost(GAMECHARINFO* char_info, int softcap) {
+    return reinterpret_cast<int(__thiscall*)(AltAdvManager*, GAMECHARINFO*, int)>(0x004b7b48)(this, char_info, softcap);
   }
 
   // The single class member is just an array of 227 pointers.
-  GameAltAbility *abilities[0xe3];
+  GameAltAbility* abilities[0xe3];
 };
 
 struct GameCommand {
   static constexpr int kNumCommands = 0x116;  // The array has 0x116 entries.
   int string_id;                              // For localization table.
-  const char *name;                           // Internal name.
-  const char *localized_name;                 // Loaded in LoadString from str.txt files.
+  const char* name;                           // Internal name.
+  const char* localized_name;                 // Loaded in LoadString from str.txt files.
   int fn;                                     // Command function pointer.
   short gm_command;                           // If != 0, needs entity.IsGameMaster to be set.
   short category;                             // Help command category type.
