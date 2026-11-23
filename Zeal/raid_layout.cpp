@@ -328,7 +328,7 @@ void RaidLayout::Reconcile() {
         Zeal::Game::print_chat("Raid layout: %s won't move to group %d, leaving them.", move.name.c_str(),
                                move.to + 1);
     }
-    next_attempts.push_back({move, std::min(count + 1, kMaxAttempts + 1)});
+    next_attempts.push_back({move, (std::min)(count + 1, kMaxAttempts + 1)});
   }
   attempts = std::move(next_attempts);  // Members now in place drop out and start fresh.
   if (!queue.empty())
