@@ -195,28 +195,103 @@ bool RaidLayout::BuildPlan(const std::vector<std::vector<std::string>> &layout, 
     }
   }
 
-  // Members the layout did not place leave the groups it defines; groups it leaves blank are not
-  // touched, so a layout for groups 1-6 does not disturb whoever sits in 7-12.
+  // Pinned names are never moved by the consolidation below.
+  std::vector<bool> pinned(members.size(), false);
+  for (const auto &slot : slots)
+    if (slot.member >= 0 && IsNameToken(slot.token)) pinned[slot.member] = true;
+
+  // Members the layout did not place: those in groups it leaves blank are not touched (a layout for
+  // groups 1-6 doesn't disturb 7-12); the rest are spare and go wherever consolidation has room.
+  std::array<int, kNumGroups> size{};
+  for (size_t i = 0; i < members.size(); ++i)
+    if (target[i] >= 0) size[target[i]]++;
+  std::vector<int> spare;
   for (size_t i = 0; i < members.size(); ++i) {
     if (target[i] != -2) continue;
     const int g = members[i].group;
-    target[i] = (g != kUngrouped && !layout[g].empty()) ? kUngrouped : g;
+    if (g != kUngrouped && layout[g].empty()) {
+      target[i] = g;
+    } else {
+      target[i] = kUngrouped;
+      spare.push_back(static_cast<int>(i));
+    }
   }
 
-  // Unfilled slots are reported one line per group. An open '*' slot is just spare room, not a
-  // gap, so it isn't reported at all (a big layout's filler groups otherwise flood the chat).
-  plan.groups.assign(kNumGroups, {});
-  std::vector<std::string> missing(kNumGroups);
-  for (const auto &slot : slots) {
-    if (slot.member < 0) {
-      if (slot.token != "*") missing[slot.group] += (missing[slot.group].empty() ? "" : " ") + slot.token;
+  // A full group beats several thin ones. Class matching spreads a small raid across every group
+  // that has a matching slot, so: (1) spare members fill the fullest layout groups that have room,
+  // then (2) while two or more layout groups are part-filled, the smallest is emptied into the
+  // fullest. A member stays in their current group when it is one of the candidates, which keeps
+  // keep mode from shuffling a raid it has already settled.
+  //
+  // Where member i goes among layout groups with room (other than exclude): their current group if
+  // it already has people, else the fullest group that has people, else (all empty) their current
+  // group or the lowest-numbered one. -1 when every layout group is full.
+  auto best_group = [&](int i, int exclude) {
+    const int cur = members[i].group;
+    auto open = [&](int g) { return g >= 0 && g != exclude && !layout[g].empty() && size[g] < kGroupSize; };
+    if (open(cur) && size[cur] > 0) return cur;
+    int best = -1;
+    for (int g = 0; g < kNumGroups; ++g)
+      if (open(g) && size[g] > 0 && (best < 0 || size[g] > size[best])) best = g;
+    if (best >= 0) return best;
+    if (open(cur)) return cur;
+    for (int g = 0; g < kNumGroups; ++g)
+      if (open(g)) return g;
+    return -1;
+  };
+  for (int i : spare) {
+    const int g = best_group(i, -1);
+    if (g < 0) continue;  // Every layout group is full: stays ungrouped.
+    target[i] = g;
+    size[g]++;
+  }
+  std::array<bool, kNumGroups> settled{};
+  while (true) {
+    int smallest = -1, room_elsewhere = 0, partial = 0;
+    for (int g = 0; g < kNumGroups; ++g) {
+      if (layout[g].empty() || size[g] == 0 || size[g] >= kGroupSize) continue;
+      partial++;
+      if (settled[g]) continue;
+      if (smallest < 0 || size[g] < size[smallest] || (size[g] == size[smallest] && g > smallest)) smallest = g;
+    }
+    if (partial < 2 || smallest < 0) break;
+    for (int g = 0; g < kNumGroups; ++g)
+      if (g != smallest && !layout[g].empty() && size[g] > 0) room_elsewhere += kGroupSize - size[g];
+    int movable = 0;
+    for (size_t i = 0; i < members.size(); ++i)
+      if (target[i] == smallest && !pinned[i]) movable++;
+    if (movable < size[smallest] || room_elsewhere < movable) {  // Pinned members, or no room.
+      settled[smallest] = true;
       continue;
     }
-    const auto &m = members[slot.member];
-    plan.groups[slot.group].push_back(m.name + " (" + Zeal::Game::class_name_short(m.class_id) + ")");
+    for (size_t i = 0; i < members.size(); ++i) {
+      if (target[i] != smallest) continue;
+      size[smallest]--;  // Out first, so best_group never picks this group (it may be the current one).
+      const int best = best_group(static_cast<int>(i), smallest);
+      if (best < 0) {  // Can't happen (room was counted above), but never index with -1.
+        size[smallest]++;
+        continue;
+      }
+      size[best]++;
+      target[i] = best;
+    }
   }
+
+  // Display: each layout group's members, and per group the slot tokens nobody matched. An open
+  // '*' slot is spare room, not a gap, so it isn't reported (filler groups otherwise flood the chat);
+  // a group emptied by consolidation isn't reported either.
+  plan.groups.assign(kNumGroups, {});
+  for (size_t i = 0; i < members.size(); ++i)
+    if (target[i] >= 0 && !layout[target[i]].empty())
+      plan.groups[target[i]].push_back(members[i].name + " (" +
+                                       Zeal::Game::class_name_short(members[i].class_id) + ")");
+  std::vector<std::string> missing(kNumGroups);
+  for (const auto &slot : slots)
+    if (slot.member < 0 && slot.token != "*" && size[slot.group] > 0)
+      missing[slot.group] += (missing[slot.group].empty() ? "" : " ") + slot.token;
   for (int g = 0; g < kNumGroups; ++g)
-    if (!missing[g].empty()) plan.unfilled.push_back("group " + std::to_string(g + 1) + ": " + missing[g]);
+    if (!missing[g].empty() && size[g] < kGroupSize)
+      plan.unfilled.push_back("group " + std::to_string(g + 1) + ": " + missing[g]);
 
   // Order the moves against a running count per group: a move only goes out once its destination
   // has room. Leaving moves (to ungrouped, or out of a group) come first and make that room.
