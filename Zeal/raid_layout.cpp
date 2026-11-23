@@ -218,20 +218,31 @@ bool RaidLayout::BuildPlan(const std::vector<std::vector<std::string>> &layout, 
     return TokenSpecificity(a->token) < TokenSpecificity(b->token);
   });
 
-  // How many still-open single-class slots want this class. A broad slot (TANK, CLR|DRU, *) takes
-  // the candidate whose class is least wanted elsewhere, so TANK takes the paladin and leaves the
-  // warrior for a WAR slot.
-  auto demand = [&](int class_id, const Slot *except) {
+  // How many classes a token accepts: WAR 1, TANK 3, MELEE 8, '*' 15.
+  auto breadth = [](const std::string &token) {
+    int n = 0;
+    for (int id = Zeal::GameEnums::ClassTypes::Warrior; id <= Zeal::GameEnums::ClassTypes::Beastlord; ++id)
+      if (TokenMatches(token, id)) n++;
+    return n;
+  };
+  std::vector<int> slot_breadth(slots.size());
+  for (size_t k = 0; k < slots.size(); ++k) slot_breadth[k] = breadth(slots[k].token);
+  auto breadth_of = [&](const Slot *slot) { return slot_breadth[slot - slots.data()]; };
+
+  // How many still-open, narrower slots want this class. A broad slot takes the candidate least
+  // wanted by narrower ones: TANK leaves the warrior for a WAR slot, MELEE leaves the paladin and
+  // shadowknight for TANK slots, PRIEST leaves the shaman for an SHM slot.
+  auto demand = [&](int class_id, const Slot *slot) {
     int n = 0;
     for (const Slot *o : order)
-      if (o != except && o->member < 0 && TokenSpecificity(o->token) == 0 && TokenMatches(o->token, class_id)) n++;
+      if (o != slot && o->member < 0 && breadth_of(o) < breadth_of(slot) && TokenMatches(o->token, class_id)) n++;
     return n;
   };
 
   // Each slot takes the best match: least wanted elsewhere, then someone already in that group (so
   // keep mode doesn't shuffle a settled raid), then raid order.
   for (Slot *slot : order) {
-    const bool broad = TokenSpecificity(slot->token) > 0;
+    const bool broad = breadth_of(slot) > 1;
     int pick = -1, pick_demand = 0;
     bool pick_here = false;
     for (size_t i = 0; i < members.size(); ++i) {
